@@ -33,6 +33,6 @@ end)
 
 printDebug("Main thread!")
 
-task.cancel(thread2)
+coroutine.close(thread2)
 
 printDebug(`Canceled thread {threads[thread2]}`)
