@@ -1,8 +1,8 @@
-use crate::{util::is_poll_pending, JoinHandles, ThreadHandle};
+use crate::{util::is_poll_pending, Scheduler, ThreadHandle};
 use std::time::Duration;
 
-fn lua_spawn(
-    lua: &mlua::Lua,
+async fn lua_spawn(
+    lua: mlua::Lua,
     (func, args): (mlua::Either<mlua::Function, mlua::Thread>, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
     let thread = func
@@ -16,13 +16,17 @@ fn lua_spawn(
     match thread.resume::<mlua::MultiValue>(args.clone()) {
         Ok(v) => {
             if v.get(0).is_some_and(is_poll_pending) {
-                let tokio_handle = tokio::spawn(async {
+                let lua_inner = lua.clone();
+                let tokio_handle = tokio::spawn(async move {
                     match thread_inner.status() {
                         mlua::ThreadStatus::Resumable => {
                             let stream = thread_inner.into_async::<()>(args);
 
                             if let Err(err) = stream.await {
                                 eprintln!("{err}");
+
+                                let mut scheduler = lua_inner.app_data_mut::<Scheduler>().unwrap();
+                                scheduler.errors.push(err.clone());
                             };
                         }
                         _ => {}
@@ -30,19 +34,20 @@ fn lua_spawn(
                 });
 
                 {
-                    let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
-                    join_handles.0.push(ThreadHandle {
+                    let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+                    scheduler.handles.push(ThreadHandle {
                         tokio: Some(tokio_handle),
                     });
                 }
             } else {
-                let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
-                join_handles.0.push(ThreadHandle { tokio: None });
+                let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+                scheduler.handles.push(ThreadHandle { tokio: None });
             }
         }
         Err(err) => {
-            let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
-            join_handles.0.push(ThreadHandle { tokio: None });
+            let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+            scheduler.handles.push(ThreadHandle { tokio: None });
+            scheduler.errors.push(err.clone());
 
             eprintln!("{err}");
         }
@@ -67,7 +72,7 @@ pub struct Functions {
 impl Functions {
     pub fn new(lua: &mlua::Lua) -> mlua::Result<Self> {
         let spawn = lua
-            .create_function(lua_spawn)
+            .create_async_function(lua_spawn)
             .expect("Failed to create spawn function");
 
         let cancel = lua

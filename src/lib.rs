@@ -10,17 +10,21 @@ pub(crate) struct ThreadHandle {
     tokio: Option<JoinHandle<()>>,
 }
 
-pub(crate) struct JoinHandles(Vec<ThreadHandle>);
+#[derive(Default)]
+pub(crate) struct Scheduler {
+    handles: Vec<ThreadHandle>,
+    errors: Vec<mlua::Error>,
+}
 
 pub fn setup_scheduler(lua: &mlua::Lua) {
-    lua.set_app_data(JoinHandles(Vec::new()));
+    lua.set_app_data(Scheduler::default());
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) {
     'main: loop {
-        let join_handles = lua.app_data_ref::<JoinHandles>().unwrap();
+        let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
 
-        for handle in &join_handles.0 {
+        for handle in &scheduler.handles {
             if let Some(tokio_handle) = &handle.tokio {
                 if tokio_handle.is_finished() {
                     continue;
@@ -30,7 +34,7 @@ pub async fn await_scheduler(lua: &mlua::Lua) {
             }
         }
 
-        drop(join_handles);
+        drop(scheduler);
 
         tokio::task::yield_now().await;
 
