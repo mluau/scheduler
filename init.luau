@@ -7,13 +7,13 @@ local threads: { [thread]: number } = {
 
 local threadIdReserved = 1
 
-print("time", "thread", "", "info")
+print("time", "", "thread", "", "info")
 
 local function printDebug(...: string)
 	local thread = coroutine.running()
 
 	if threads[thread] then
-		return print(math.floor(os.clock()), `thread {threads[thread]}`, ...)
+		return print(string.format("%.3f", os.clock()), `thread {threads[thread]}`, ...)
 	else
 		threadIdReserved += 1
 		threads[thread] = threadIdReserved
