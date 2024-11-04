@@ -3,9 +3,14 @@ use std::time::Duration;
 
 fn lua_spawn(
     lua: &mlua::Lua,
-    (func, args): (mlua::Function, mlua::MultiValue),
+    (func, args): (mlua::Either<mlua::Function, mlua::Thread>, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
-    let thread = lua.create_thread(func).unwrap();
+    let thread = func
+        .map_left(|x| {
+            lua.create_thread(x)
+                .expect("Failed to turn function into thread")
+        })
+        .into_inner();
     let thread_inner = thread.clone();
 
     match thread.resume::<mlua::MultiValue>(args.clone()) {
@@ -17,7 +22,7 @@ fn lua_spawn(
                             let stream = thread_inner.into_async::<()>(args);
 
                             if let Err(err) = stream.await {
-                                println!("{err}");
+                                eprintln!("{err}");
                             };
                         }
                         _ => {}
@@ -39,7 +44,7 @@ fn lua_spawn(
             let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
             join_handles.0.push(ThreadHandle { tokio: None });
 
-            println!("{err}");
+            eprintln!("{err}");
         }
     };
 
