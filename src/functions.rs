@@ -14,7 +14,7 @@ fn lua_spawn(
         Ok(v) => {
             if v.get(0).is_some_and(is_poll_pending) {
                 join_handles.0.push(ThreadHandle {
-                    tokio: Some(tokio::task::spawn(async move {
+                    tokio: Some(tokio::spawn(async move {
                         match thread_inner.status() {
                             mlua::ThreadStatus::Resumable => {
                                 let stream = thread_inner.into_async::<()>(args);
@@ -27,6 +27,8 @@ fn lua_spawn(
                         }
                     })),
                 });
+
+                drop(join_handles);
             } else {
                 join_handles.0.push(ThreadHandle { tokio: None });
             }
