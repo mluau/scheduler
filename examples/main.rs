@@ -1,5 +1,7 @@
 use tokio::fs;
 
+const PATH: &str = "examples/init.luau";
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let lua = mlua::Lua::new();
@@ -9,16 +11,11 @@ async fn main() {
 
     let chunk = lua
         .load(
-            fs::read_to_string("init.luau")
+            fs::read_to_string(PATH)
                 .await
                 .expect("Failed to read init.luau"),
         )
-        .set_name(
-            fs::canonicalize("init.luau")
-                .await
-                .unwrap()
-                .to_string_lossy(),
-        );
+        .set_name(fs::canonicalize(PATH).await.unwrap().to_string_lossy());
 
     if let Err(err) = chunk.exec_async().await {
         println!("{err}")
