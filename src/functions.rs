@@ -5,35 +5,38 @@ fn lua_spawn(
     lua: &mlua::Lua,
     (func, args): (mlua::Function, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
-    let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
-
     let thread = lua.create_thread(func).unwrap();
     let thread_inner = thread.clone();
 
     match thread.resume::<mlua::MultiValue>(args.clone()) {
         Ok(v) => {
             if v.get(0).is_some_and(is_poll_pending) {
-                join_handles.0.push(ThreadHandle {
-                    tokio: Some(tokio::spawn(async move {
-                        match thread_inner.status() {
-                            mlua::ThreadStatus::Resumable => {
-                                let stream = thread_inner.into_async::<()>(args);
+                let tokio_handle = tokio::spawn(async {
+                    match thread_inner.status() {
+                        mlua::ThreadStatus::Resumable => {
+                            let stream = thread_inner.into_async::<()>(args);
 
-                                if let Err(err) = stream.await {
-                                    println!("{err}");
-                                };
-                            }
-                            _ => {}
+                            if let Err(err) = stream.await {
+                                println!("{err}");
+                            };
                         }
-                    })),
+                        _ => {}
+                    }
                 });
 
-                drop(join_handles);
+                {
+                    let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
+                    join_handles.0.push(ThreadHandle {
+                        tokio: Some(tokio_handle),
+                    });
+                }
             } else {
+                let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
                 join_handles.0.push(ThreadHandle { tokio: None });
             }
         }
         Err(err) => {
+            let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
             join_handles.0.push(ThreadHandle { tokio: None });
 
             println!("{err}");

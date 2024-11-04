@@ -36,12 +36,6 @@ local thread2 = task.spawn(function()
 	printDebug("Finished waiting")
 end)
 
-task.spawn(function()
-	task.spawn(function()
-		printDebug("hmmm")
-	end)
-end)
-
 coroutine.close(thread2)
 
 printDebug("Waiting for 0.5 seconds")
