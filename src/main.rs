@@ -26,11 +26,18 @@ async fn main() {
 
     lua.set_app_data(JoinHandles(Vec::new()));
 
-    let chunk = lua.load(
-        fs::read_to_string("init.luau")
-            .await
-            .expect("Failed to read init.luau"),
-    );
+    let chunk = lua
+        .load(
+            fs::read_to_string("init.luau")
+                .await
+                .expect("Failed to read init.luau"),
+        )
+        .set_name(
+            fs::canonicalize("init.luau")
+                .await
+                .unwrap()
+                .to_string_lossy(),
+        );
 
     if let Err(err) = chunk.exec_async().await {
         println!("{err}")
