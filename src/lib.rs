@@ -1,4 +1,4 @@
-use tokio::task::JoinHandle;
+use std::time::Duration;
 
 #[cfg(test)]
 mod test;
@@ -7,7 +7,7 @@ pub mod functions;
 pub(crate) mod util;
 
 pub(crate) struct ThreadHandle {
-    tokio: Option<JoinHandle<()>>,
+    thread: mlua::Thread,
 }
 
 #[derive(Default)]
@@ -21,16 +21,17 @@ pub fn setup_scheduler(lua: &mlua::Lua) {
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
+    tokio::time::sleep(Duration::ZERO).await;
+
     'main: loop {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
 
         for handle in &scheduler.handles {
-            if let Some(tokio_handle) = &handle.tokio {
-                if tokio_handle.is_finished() {
-                    continue;
+            match handle.thread.status() {
+                mlua::ThreadStatus::Running => {
+                    continue 'main;
                 }
-
-                continue 'main;
+                _ => {}
             }
         }
 

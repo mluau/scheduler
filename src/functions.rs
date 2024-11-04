@@ -13,11 +13,18 @@ async fn lua_spawn(
         .into_inner();
     let thread_inner = thread.clone();
 
+    {
+        let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+        scheduler.handles.push(ThreadHandle {
+            thread: thread.clone(),
+        });
+    }
+
     match thread.resume::<mlua::MultiValue>(args.clone()) {
         Ok(v) => {
             if v.get(0).is_some_and(is_poll_pending) {
                 let lua_inner = lua.clone();
-                let tokio_handle = tokio::spawn(async move {
+                tokio::spawn(async move {
                     match thread_inner.status() {
                         mlua::ThreadStatus::Resumable => {
                             let stream = thread_inner.into_async::<()>(args);
@@ -32,21 +39,10 @@ async fn lua_spawn(
                         _ => {}
                     }
                 });
-
-                {
-                    let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
-                    scheduler.handles.push(ThreadHandle {
-                        tokio: Some(tokio_handle),
-                    });
-                }
-            } else {
-                let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
-                scheduler.handles.push(ThreadHandle { tokio: None });
             }
         }
         Err(err) => {
             let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
-            scheduler.handles.push(ThreadHandle { tokio: None });
             scheduler.errors.push(err.clone());
 
             eprintln!("{err}");
