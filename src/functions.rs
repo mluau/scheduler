@@ -18,7 +18,10 @@ async fn lua_spawn(
                         match thread_inner.status() {
                             mlua::ThreadStatus::Resumable => {
                                 let stream = thread_inner.into_async::<()>(args);
-                                stream.await.expect("Failed to run spawned thread");
+
+                                if let Err(err) = stream.await {
+                                    println!("{err}");
+                                };
                             }
                             _ => {}
                         }
@@ -31,7 +34,7 @@ async fn lua_spawn(
         Err(err) => {
             join_handles.0.push(ThreadHandle { tokio: None });
 
-            panic!("{err}")
+            println!("{err}");
         }
     };
 
