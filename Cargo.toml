@@ -1,0 +1,8 @@
+[package]
+name = "mlua_scheduler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
+tokio = { version = "*", features = ["full"] }
