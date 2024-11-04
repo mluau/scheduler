@@ -1,5 +1,8 @@
 use tokio::task::JoinHandle;
 
+#[cfg(test)]
+mod test;
+
 pub mod functions;
 pub(crate) mod util;
 
