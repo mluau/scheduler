@@ -18,7 +18,7 @@ async fn main() {
         .set_name(fs::canonicalize(PATH).await.unwrap().to_string_lossy());
 
     if let Err(err) = chunk.exec_async().await {
-        println!("{err}")
+        eprintln!("{err}")
     };
 
     mlua_scheduler::await_scheduler(&lua).await;
