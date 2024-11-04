@@ -1,5 +1,6 @@
 use crate::{util::is_poll_pending, Scheduler, ThreadHandle};
 use std::time::Duration;
+use tokio::time::Instant;
 
 async fn lua_spawn(
     lua: mlua::Lua,
@@ -52,10 +53,13 @@ async fn lua_spawn(
     Ok(thread)
 }
 
-async fn lua_wait(_lua: mlua::Lua, amount: f64) -> mlua::Result<()> {
-    tokio::time::sleep(Duration::from_secs_f64(amount)).await;
+async fn lua_wait(_lua: mlua::Lua, amount: Option<f64>) -> mlua::Result<f64> {
+    let duration = Duration::from_secs_f64(amount.unwrap_or_default());
+    let started = Instant::now();
 
-    Ok(())
+    tokio::time::sleep(duration).await;
+
+    Ok((Instant::now() - started).as_secs_f64())
 }
 
 pub struct Functions {
