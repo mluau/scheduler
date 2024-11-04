@@ -1,4 +1,3 @@
-use crate::{util::is_poll_pending, Scheduler, ThreadHandle};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -12,45 +11,8 @@ async fn lua_spawn(
                 .expect("Failed to turn function into thread")
         })
         .into_inner();
-    let thread_inner = thread.clone();
 
-    {
-        let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
-        scheduler.handles.push(ThreadHandle {
-            thread: thread.clone(),
-        });
-    }
-
-    match thread.resume::<mlua::MultiValue>(args.clone()) {
-        Ok(v) => {
-            if v.get(0).is_some_and(is_poll_pending) {
-                let lua_inner = lua.clone();
-                tokio::spawn(async move {
-                    match thread_inner.status() {
-                        mlua::ThreadStatus::Resumable => {
-                            let stream = thread_inner.into_async::<()>(args);
-
-                            if let Err(err) = stream.await {
-                                eprintln!("{err}");
-
-                                let mut scheduler = lua_inner.app_data_mut::<Scheduler>().unwrap();
-                                scheduler.errors.push(err.clone());
-                            };
-                        }
-                        _ => {}
-                    }
-                });
-            }
-        }
-        Err(err) => {
-            let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
-            scheduler.errors.push(err.clone());
-
-            eprintln!("{err}");
-        }
-    };
-
-    Ok(thread)
+    crate::spawn_local(&lua, thread, args)
 }
 
 async fn lua_wait(_lua: mlua::Lua, amount: Option<f64>) -> mlua::Result<f64> {

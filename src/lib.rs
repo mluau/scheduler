@@ -20,6 +20,53 @@ pub fn setup_scheduler(lua: &mlua::Lua) {
     lua.set_app_data(Scheduler::default());
 }
 
+pub fn spawn_local<A: mlua::IntoLuaMulti>(
+    lua: &mlua::Lua,
+    thread: mlua::Thread,
+    args: A,
+) -> mlua::Result<mlua::Thread> {
+    let thread_inner = thread.clone();
+    let args = args.into_lua_multi(lua)?;
+
+    {
+        let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+        scheduler.handles.push(ThreadHandle {
+            thread: thread.clone(),
+        });
+    }
+
+    match thread.resume::<mlua::MultiValue>(args.clone()) {
+        Ok(v) => {
+            if v.get(0).is_some_and(util::is_poll_pending) {
+                let lua_inner = lua.clone();
+                tokio::spawn(async move {
+                    match thread_inner.status() {
+                        mlua::ThreadStatus::Resumable => {
+                            let stream = thread_inner.into_async::<()>(args);
+
+                            if let Err(err) = stream.await {
+                                eprintln!("{err}");
+
+                                let mut scheduler = lua_inner.app_data_mut::<Scheduler>().unwrap();
+                                scheduler.errors.push(err.clone());
+                            };
+                        }
+                        _ => {}
+                    }
+                });
+            }
+        }
+        Err(err) => {
+            let mut scheduler = lua.app_data_mut::<Scheduler>().unwrap();
+            scheduler.errors.push(err.clone());
+
+            eprintln!("{err}");
+        }
+    };
+
+    Ok(thread)
+}
+
 pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
     tokio::time::sleep(Duration::ZERO).await;
 

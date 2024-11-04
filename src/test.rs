@@ -9,10 +9,17 @@ async fn test_spawn() {
         .load(include_str!("../tests/spawn.luau"))
         .set_name("./tests/spawn.luau");
 
-    if let Err(err) = chunk.exec_async().await {
-        eprintln!("{err}");
-        panic!();
-    };
+    crate::spawn_local(
+        &lua,
+        lua.create_thread(
+            chunk
+                .into_function()
+                .expect("Failed to turn chunk into function"),
+        )
+        .expect("Failed to turn function into thread"),
+        (),
+    )
+    .expect("Failed to spawn thread");
 
     assert!(crate::await_scheduler(&lua).await.errors.is_empty());
 }

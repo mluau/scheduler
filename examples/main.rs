@@ -17,9 +17,17 @@ async fn main() {
         )
         .set_name(fs::canonicalize(PATH).await.unwrap().to_string_lossy());
 
-    if let Err(err) = chunk.exec_async().await {
-        eprintln!("{err}")
-    };
+    mlua_scheduler::spawn_local(
+        &lua,
+        lua.create_thread(
+            chunk
+                .into_function()
+                .expect("Failed to turn chunk into function"),
+        )
+        .expect("Failed to turn function into thread"),
+        (),
+    )
+    .expect("Failed to spawn thread");
 
     std::process::exit(
         if mlua_scheduler::await_scheduler(&lua)
