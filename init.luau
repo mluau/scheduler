@@ -1,6 +1,9 @@
 --!nocheck
 --!nolint UnknownGlobal
 
+-- for testing
+local task = task or require("@lune/task")
+
 local threads: { [thread]: number } = {
 	[coroutine.running()] = 1,
 }
@@ -31,6 +34,11 @@ local thread2 = task.spawn(function()
 	printDebug("Waiting for 1 second...")
 	task.wait(1)
 	printDebug("Finished waiting")
+end)
+
+task.spawn(function()
+	task.wait(0.5)
+	error("thread error!")
 end)
 
 coroutine.close(thread2)
