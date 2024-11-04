@@ -5,4 +5,12 @@ edition = "2021"
 
 [dependencies]
 mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
-tokio = { version = "1.41.0", features = ["full"] }
+tokio = { version = "1.41.0", features = ["rt", "macros", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.41.0", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "fs",
+] }
