@@ -35,4 +35,8 @@ end)
 
 coroutine.close(thread2)
 
+printDebug("Waiting for 0.5 seconds")
+
+task.wait(0.5)
+
 printDebug(`Canceled thread {threads[thread2]}`)
