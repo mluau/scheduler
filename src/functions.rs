@@ -1,8 +1,8 @@
 use crate::{util::is_poll_pending, JoinHandles, ThreadHandle};
 use std::time::Duration;
 
-async fn lua_spawn(
-    lua: mlua::Lua,
+fn lua_spawn(
+    lua: &mlua::Lua,
     (func, args): (mlua::Function, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
     let mut join_handles = lua.app_data_mut::<JoinHandles>().unwrap();
@@ -14,7 +14,7 @@ async fn lua_spawn(
         Ok(v) => {
             if v.get(0).is_some_and(is_poll_pending) {
                 join_handles.0.push(ThreadHandle {
-                    tokio: Some(tokio::spawn(async move {
+                    tokio: Some(tokio::task::spawn(async move {
                         match thread_inner.status() {
                             mlua::ThreadStatus::Resumable => {
                                 let stream = thread_inner.into_async::<()>(args);
@@ -57,7 +57,7 @@ pub struct Functions {
 impl Functions {
     pub fn new(lua: &mlua::Lua) -> mlua::Result<Self> {
         let spawn = lua
-            .create_async_function(lua_spawn)
+            .create_function(lua_spawn)
             .expect("Failed to create spawn function");
 
         let cancel = lua

@@ -14,12 +14,24 @@ pub fn setup_scheduler(lua: &mlua::Lua) {
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) {
-    let join_handles = lua.remove_app_data::<JoinHandles>().unwrap();
+    'main: loop {
+        let join_handles = lua.app_data_ref::<JoinHandles>().unwrap();
 
-    for mut handle in join_handles.0 {
-        if let Some(tokio_handle) = handle.tokio.take() {
-            tokio_handle.await.expect("Spawned thread failed")
+        for handle in &join_handles.0 {
+            if let Some(tokio_handle) = &handle.tokio {
+                if tokio_handle.is_finished() {
+                    continue;
+                }
+
+                continue 'main;
+            }
         }
+
+        drop(join_handles);
+
+        tokio::task::yield_now().await;
+
+        break 'main;
     }
 }
 

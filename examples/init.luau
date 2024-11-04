@@ -37,8 +37,9 @@ local thread2 = task.spawn(function()
 end)
 
 task.spawn(function()
-	task.wait(0.5)
-	error("thread error!")
+	task.spawn(function()
+		printDebug("hmmm")
+	end)
 end)
 
 coroutine.close(thread2)
