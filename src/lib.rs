@@ -11,16 +11,16 @@ pub(crate) struct ThreadHandle {
 }
 
 #[derive(Default)]
-pub(crate) struct Scheduler {
-    handles: Vec<ThreadHandle>,
-    errors: Vec<mlua::Error>,
+pub struct Scheduler {
+    pub(crate) handles: Vec<ThreadHandle>,
+    pub errors: Vec<mlua::Error>,
 }
 
 pub fn setup_scheduler(lua: &mlua::Lua) {
     lua.set_app_data(Scheduler::default());
 }
 
-pub async fn await_scheduler(lua: &mlua::Lua) {
+pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
     'main: loop {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
 
@@ -40,6 +40,8 @@ pub async fn await_scheduler(lua: &mlua::Lua) {
 
         break 'main;
     }
+
+    lua.remove_app_data::<Scheduler>().unwrap()
 }
 
 pub fn inject_globals(lua: &mlua::Lua) {

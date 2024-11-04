@@ -14,5 +14,5 @@ async fn test_spawn() {
         panic!();
     };
 
-    crate::await_scheduler(&lua).await;
+    assert!(crate::await_scheduler(&lua).await.errors.is_empty());
 }

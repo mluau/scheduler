@@ -21,5 +21,15 @@ async fn main() {
         eprintln!("{err}")
     };
 
-    mlua_scheduler::await_scheduler(&lua).await;
+    std::process::exit(
+        if mlua_scheduler::await_scheduler(&lua)
+            .await
+            .errors
+            .is_empty()
+        {
+            0
+        } else {
+            1
+        },
+    )
 }
