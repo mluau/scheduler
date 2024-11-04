@@ -7,6 +7,8 @@ local threads: { [thread]: number } = {
 
 local threadIdReserved = 1
 
+print("time", "thread", "", "info")
+
 local function printDebug(...: string)
 	local thread = coroutine.running()
 
@@ -30,8 +32,6 @@ local thread2 = task.spawn(function()
 	task.wait(1)
 	printDebug("Finished waiting")
 end)
-
-printDebug("Main thread!")
 
 coroutine.close(thread2)
 
