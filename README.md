@@ -4,7 +4,7 @@ An scheduler for mlua which uses the tokio runtime
 
 ## caveats
 
-the scheduler yields infinitely if using tokio's runtime without the multi_thread flavor
+The scheduler yields infinitely when using tokio's runtime without the multi_thread flavor
 
 ## credits
 
