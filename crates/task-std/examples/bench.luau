@@ -7,8 +7,3 @@ for i = 1, amount do
 end
 local took = os.clock() - started
 print(`Spawned {amount} sleeping threads in {took}s`)
-
--- while true do
--- print(os.clock())
--- task.wait()
--- end

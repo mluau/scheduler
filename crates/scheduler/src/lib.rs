@@ -135,7 +135,6 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
             while let Ok(runnable) = spawn_recv.try_recv() {
                 smol::spawn(async move {
                     runnable.run();
-                    smol::future::yield_now().await;
                 })
                 .detach();
             }
@@ -143,7 +142,6 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
             while let Ok(runnable) = defer_recv.try_recv() {
                 smol::spawn(async move {
                     runnable.run();
-                    smol::future::yield_now().await;
                 })
                 .detach();
             }
