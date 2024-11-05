@@ -23,6 +23,25 @@ async fn main() {
         .unwrap(),
     )
     .unwrap();
+    task.set(
+        "delay",
+        lua.create_async_function(|lua, (secs, func): (f64, mlua::Function)| async move {
+            tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+
+            mlua_scheduler::spawn_local(
+                &lua,
+                lua.create_thread(func).unwrap(),
+                mlua_scheduler::SpawnProt::Spawn,
+                (),
+            )
+            .await
+            .expect("Failed to spawn thread");
+
+            Ok(())
+        })
+        .unwrap(),
+    )
+    .unwrap();
 
     lua.globals().set("task", task).unwrap();
 
