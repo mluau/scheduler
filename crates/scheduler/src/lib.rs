@@ -1,25 +1,33 @@
-// use std::time::Duration;
-
 use async_task::Runnable;
 use smol::future::block_on;
+use std::sync::{Arc, Mutex};
 
 pub mod functions;
 pub(crate) mod util;
 
 #[derive(Debug)]
 pub struct Scheduler {
-    pub(crate) spawn_channel: (flume::Sender<Runnable>, flume::Receiver<Runnable>),
-    pub(crate) defer_channel: (flume::Sender<Runnable>, flume::Receiver<Runnable>),
+    pub(crate) spawn_channel: (
+        smol::channel::Sender<Runnable>,
+        smol::channel::Receiver<Runnable>,
+    ),
+    pub(crate) defer_channel: (
+        smol::channel::Sender<Runnable>,
+        smol::channel::Receiver<Runnable>,
+    ),
 
+    pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
     pub errors: Vec<mlua::Error>,
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
         Self {
-            spawn_channel: flume::unbounded(),
-            defer_channel: flume::unbounded(),
-            errors: Vec::new(),
+            spawn_channel: smol::channel::unbounded(),
+            defer_channel: smol::channel::unbounded(),
+
+            threads: Default::default(),
+            errors: Default::default(),
         }
     }
 }
@@ -44,6 +52,7 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
 
     let sender = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
+        scheduler.threads.lock().unwrap().push(thread.clone());
         match prot {
             SpawnProt::Spawn => scheduler.spawn_channel.0.clone(),
             SpawnProt::Defer => scheduler.defer_channel.0.clone(),
@@ -86,8 +95,20 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
                 _ => {}
             }
         },
-        move |runnable| {
-            sender.send(runnable).unwrap();
+        move |runnable: Runnable| {
+            // let waker = runnable.waker();
+
+            if let Err(err) = sender.send_blocking(runnable) {
+                eprintln!("{err}");
+            }
+
+            // if let Err(err) = sender_inner.lock().unwrap().try_send(runnable) {
+            //     if matches!(err, smol::channel::TrySendError::Full(_)) {
+            //         waker.wake();
+            //     } else {
+            //         eprintln!("{err}");
+            //     }
+            // }
         },
     );
 
@@ -100,41 +121,40 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
 pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
     smol::future::yield_now().await;
 
-    let (spawn_recv, defer_recv) = {
+    let (threads, spawn_recv, defer_recv) = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
         (
+            Arc::clone(&scheduler.threads),
             scheduler.spawn_channel.1.clone(),
             scheduler.defer_channel.1.clone(),
         )
     };
 
     block_on(async move {
-        loop {
-            if spawn_recv.sender_count() > 1 {
-                while let Ok(runnable) = spawn_recv.try_recv() {
+        'main: loop {
+            while let Ok(runnable) = spawn_recv.try_recv() {
+                smol::spawn(async move {
                     runnable.run();
+                    smol::future::yield_now().await;
+                })
+                .detach();
+            }
 
-                    if spawn_recv.sender_count() == 1 {
-                        break;
-                    }
+            while let Ok(runnable) = defer_recv.try_recv() {
+                smol::spawn(async move {
+                    runnable.run();
+                    smol::future::yield_now().await;
+                })
+                .detach();
+            }
+
+            for thread in threads.lock().unwrap().iter() {
+                if !matches!(thread.status(), mlua::ThreadStatus::Finished) {
+                    continue 'main;
                 }
             }
 
-            if defer_recv.sender_count() > 1 {
-                while let Ok(runnable) = defer_recv.try_recv() {
-                    runnable.run();
-
-                    if spawn_recv.sender_count() == 1 {
-                        break;
-                    }
-                }
-            }
-
-            if spawn_recv.sender_count() == 1 && defer_recv.sender_count() == 1 {
-                break;
-            }
-
-            smol::future::yield_now().await;
+            break 'main;
         }
     });
 

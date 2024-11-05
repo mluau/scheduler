@@ -1,6 +1,14 @@
 local started = os.clock()
-for i = 1, 1000000 do
-	task.spawn(function() end)
+local amount = 100000
+for i = 1, amount do
+	task.spawn(function()
+		task.wait(5)
+	end)
 end
 local took = os.clock() - started
-print(`Spawned 1000000 sleeping threads in {took}s`)
+print(`Spawned {amount} sleeping threads in {took}s`)
+
+-- while true do
+-- print(os.clock())
+-- task.wait()
+-- end

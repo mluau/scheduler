@@ -7,7 +7,7 @@ edition = "2021"
 mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
 async-task = "4.7.1"
 smol = "2.0.2"
-flume = "0.11.1"
+# flume = "0.11.1"
 
 [dev-dependencies]
 # used by tests
