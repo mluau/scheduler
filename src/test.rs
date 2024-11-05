@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tokio::time::Instant;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_spawn() {
     let lua = mlua::Lua::new();
     let task_functions = crate::functions::Functions::new(&lua).unwrap();
