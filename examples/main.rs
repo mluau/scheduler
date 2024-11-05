@@ -1,4 +1,5 @@
-use tokio::fs;
+use std::time::Duration;
+use tokio::{fs, time::Instant};
 
 const PATH: &str = "examples/init.luau";
 
@@ -6,7 +7,25 @@ const PATH: &str = "examples/init.luau";
 async fn main() {
     let lua = mlua::Lua::new();
 
-    mlua_scheduler::inject_globals(&lua);
+    let task_functions = mlua_scheduler::functions::Functions::new(&lua).unwrap();
+
+    let task = lua.create_table().unwrap();
+    task.set("spawn", task_functions.spawn).unwrap();
+    task.set("defer", task_functions.defer).unwrap();
+    task.set("cancel", task_functions.cancel).unwrap();
+    task.set(
+        "wait",
+        lua.create_async_function(|_, secs: Option<f64>| async move {
+            let now = Instant::now();
+            tokio::time::sleep(Duration::from_secs_f64(secs.unwrap_or_default())).await;
+            Ok((Instant::now() - now).as_secs_f64())
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    lua.globals().set("task", task).unwrap();
+
     mlua_scheduler::setup_scheduler(&lua);
 
     let chunk = lua
@@ -25,8 +44,10 @@ async fn main() {
                 .expect("Failed to turn chunk into function"),
         )
         .expect("Failed to turn function into thread"),
+        mlua_scheduler::SpawnProt::Spawn,
         (),
     )
+    .await
     .expect("Failed to spawn thread");
 
     std::process::exit(

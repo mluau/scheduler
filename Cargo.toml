@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
-tokio = { version = "1.41.0", features = ["rt", "macros", "time"] }
+async-task = "4.7.1"
+smol = "*"
+flume = "*"
 
 [dev-dependencies]
 tokio = { version = "1.41.0", features = [

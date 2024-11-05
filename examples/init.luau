@@ -24,7 +24,11 @@ local function printDebug(...: string)
 	end
 end
 
-local thread1 = task.spawn(function()
+task.defer(function()
+	printDebug("This was deffered!")
+end)
+
+task.spawn(function()
 	printDebug("Waiting for 1 second...")
 	task.wait(1)
 	printDebug("Finished waiting")
