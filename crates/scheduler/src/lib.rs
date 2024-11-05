@@ -3,12 +3,10 @@
 use async_task::Runnable;
 use smol::future::block_on;
 
-#[cfg(test)]
-mod test;
-
 pub mod functions;
 pub(crate) mod util;
 
+#[derive(Debug)]
 pub struct Scheduler {
     pub(crate) spawn_channel: (flume::Sender<Runnable>, flume::Receiver<Runnable>),
     pub(crate) defer_channel: (flume::Sender<Runnable>, flume::Receiver<Runnable>),

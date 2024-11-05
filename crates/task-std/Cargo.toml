@@ -1,0 +1,13 @@
+[package]
+name = "mlua_task_std"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
+tokio = { version = "1.41.0", features = ["time"] }
+mlua_scheduler = { version = "1.0.0", path = "../scheduler" }
+
+[dev-dependencies]
+# used by examples
+tokio = { version = "1.41.0", features = ["rt-multi-thread", "macros", "fs"] }

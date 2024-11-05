@@ -1,18 +1,3 @@
-[package]
-name = "mlua_scheduler"
-version = "1.0.0"
-edition = "2021"
-
-[dependencies]
-mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
-async-task = "4.7.1"
-smol = "2.0.2"
-flume = "0.11.1"
-
-[dev-dependencies]
-tokio = { version = "1.41.0", features = [
-    "rt-multi-thread",
-    "macros",
-    "time",
-    "fs",
-] }
+[workspace]
+resolver = "2"
+members = ["crates/scheduler", "crates/task-std"]

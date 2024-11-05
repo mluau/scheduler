@@ -465,7 +465,17 @@ dependencies = [
  "async-task",
  "flume",
  "mlua",
+ "mlua_task_std",
  "smol",
+ "tokio",
+]
+
+[[package]]
+name = "mlua_task_std"
+version = "1.0.0"
+dependencies = [
+ "mlua",
+ "mlua_scheduler",
  "tokio",
 ]
 
