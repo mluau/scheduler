@@ -100,6 +100,8 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
+    smol::future::yield_now().await;
+
     let (spawn_recv, defer_recv) = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
         (
