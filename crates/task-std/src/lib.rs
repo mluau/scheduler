@@ -18,20 +18,32 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
     )?;
     task.set(
         "delay",
-        lua.create_async_function(|lua, (secs, func): (f64, mlua::Function)| async move {
-            tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+        lua.create_async_function(
+            |lua, (secs, func, args): (f64, mlua::Function, mlua::MultiValue)| async move {
+                tokio::spawn(async move {
+                    let rust_func = lua
+                        .create_async_function(
+                            |_, (secs, func, args): (f64, mlua::Function, mlua::MultiValue)| async move {
+                                tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+                               
+                                func.call_async::<()>(args).await
+                            },
+                        )
+                        .unwrap();
 
-            mlua_scheduler::spawn_local(
-                &lua,
-                lua.create_thread(func)?,
-                mlua_scheduler::SpawnProt::Spawn,
-                (),
-            )
-            .await
-            .expect("Failed to spawn thread");
+                    mlua_scheduler::spawn_local(
+                        &lua,
+                        lua.create_thread(rust_func).unwrap(),
+                        mlua_scheduler::SpawnProt::Spawn,
+                        (secs, func, args),
+                    )
+                    .await
+                    .expect("Failed to spawn thread");
+                });
 
-            Ok(())
-        })?,
+                Ok(())
+            },
+        )?,
     )?;
 
     lua.globals().set("task", task)?;
