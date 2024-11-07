@@ -18,13 +18,25 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
     task.set(
         "delay",
         lua.create_async_function(
-            |lua, (secs, func, args): (f64, mlua::Function, mlua::MultiValue)| async move {
+            |lua,
+             (secs, func, args): (
+                f64,
+                mlua::Either<mlua::Function, mlua::Thread>,
+                mlua::MultiValue,
+            )| async move {
+                let thread = func
+                    .map_left(|x| {
+                        lua.create_thread(x)
+                            .expect("Failed to turn function into thread")
+                    })
+                    .into_inner();
+
                 mlua_scheduler::spawn_future(&lua.clone(), async move {
                     smol::Timer::after(Duration::from_secs_f64(secs)).await;
 
                     mlua_scheduler::spawn_thread(
                         &lua,
-                        lua.create_thread(func).unwrap(),
+                        thread,
                         mlua_scheduler::SpawnProt::Spawn,
                         args,
                     )
