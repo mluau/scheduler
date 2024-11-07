@@ -104,8 +104,6 @@ async fn tick_thread(thread_info: &ThreadInfo) -> mlua::Result<()> {
         if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
             eprintln!("{err}");
         }
-
-        smol::future::yield_now().await;
     }
 
     Ok(())
@@ -140,8 +138,18 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
             suspended_threads.insert(thread_id, sender);
         }
 
-        for thread in threads.values() {
-            tick_thread(thread).await?;
+        let mut finished_threads: Vec<usize> = Vec::new();
+
+        for (thread_id, thread_info) in &threads {
+            tick_thread(&thread_info).await?;
+
+            if let mlua::ThreadStatus::Finished = thread_info.0.status() {
+                finished_threads.push(*thread_id);
+            }
+        }
+
+        for thread_id in finished_threads {
+            threads.remove(&thread_id);
         }
 
         if executor.is_empty() & suspended_threads.is_empty() {
