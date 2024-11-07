@@ -73,6 +73,10 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
     prot: SpawnProt,
     args: A,
 ) -> mlua::Result<mlua::Thread> {
+    if !matches!(thread.status(), mlua::ThreadStatus::Resumable) {
+        return Err(mlua::Error::CoroutineUnresumable);
+    }
+
     let args = args.into_lua_multi(lua)?;
 
     let pool = {
