@@ -63,7 +63,7 @@ async fn process_thread(lua: &mlua::Lua, thread_info: &ThreadInfo) -> mlua::Resu
 
     if let mlua::ThreadStatus::Resumable = thread.status() {
         // poll thread
-        if let Err(err) = thread.resume::<()>(thread_info.1.clone()) {
+        if let Err(err) = thread.into_async::<()>(thread_info.1.clone()).await {
             eprintln!("{err}");
         }
     };
@@ -78,8 +78,15 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
     };
 
     let mut threads: Vec<ThreadInfo> = Vec::new();
+    let mut processed_threads: Vec<ThreadInfo> = Vec::new();
 
     'main: loop {
+        smol::future::yield_now().await;
+
+        while let Ok(thread_info) = pool.try_recv() {
+            threads.push(thread_info);
+        }
+
         for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Spawn)) {
             process_thread(lua, thread_info).await?;
         }
@@ -88,13 +95,9 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
             process_thread(lua, thread_info).await?;
         }
 
-        while let Ok(thread_info) = pool.try_recv() {
-            threads.push(thread_info);
-        }
+        processed_threads.append(&mut threads);
 
-        smol::future::yield_now().await;
-
-        for thread_info in &threads {
+        for thread_info in &processed_threads {
             let thread: mlua::Thread = lua.registry_value(&thread_info.0)?;
 
             if let mlua::ThreadStatus::Resumable = thread.status() {
