@@ -17,7 +17,7 @@ async fn main() {
         )
         .set_name(fs::canonicalize(PATH).await.unwrap().to_string_lossy());
 
-    mlua_scheduler::spawn_local(
+    mlua_scheduler::spawn_thread(
         &lua,
         lua.create_thread(
             chunk
@@ -28,7 +28,6 @@ async fn main() {
         mlua_scheduler::SpawnProt::Spawn,
         (),
     )
-    .await
     .expect("Failed to spawn thread");
 
     std::process::exit(

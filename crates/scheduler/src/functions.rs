@@ -1,5 +1,5 @@
-async fn lua_spawn(
-    lua: mlua::Lua,
+fn lua_spawn(
+    lua: &mlua::Lua,
     (func, args): (mlua::Either<mlua::Function, mlua::Thread>, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
     let thread = func
@@ -9,11 +9,11 @@ async fn lua_spawn(
         })
         .into_inner();
 
-    crate::spawn_local(&lua, thread, crate::SpawnProt::Spawn, args).await
+    crate::spawn_thread(&lua, thread, crate::SpawnProt::Spawn, args)
 }
 
-async fn lua_defer(
-    lua: mlua::Lua,
+fn lua_defer(
+    lua: &mlua::Lua,
     (func, args): (mlua::Either<mlua::Function, mlua::Thread>, mlua::MultiValue),
 ) -> mlua::Result<mlua::Thread> {
     let thread = func
@@ -23,7 +23,7 @@ async fn lua_defer(
         })
         .into_inner();
 
-    crate::spawn_local(&lua, thread, crate::SpawnProt::Defer, args).await
+    crate::spawn_thread(&lua, thread, crate::SpawnProt::Defer, args)
 }
 
 pub struct Functions {
@@ -35,11 +35,11 @@ pub struct Functions {
 impl Functions {
     pub fn new(lua: &mlua::Lua) -> mlua::Result<Self> {
         let spawn = lua
-            .create_async_function(lua_spawn)
+            .create_function(lua_spawn)
             .expect("Failed to create spawn function");
 
         let defer = lua
-            .create_async_function(lua_defer)
+            .create_function(lua_defer)
             .expect("Failed to create spawn function");
 
         let cancel = lua
