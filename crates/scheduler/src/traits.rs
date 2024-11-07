@@ -19,6 +19,11 @@ pub trait LuaSchedulerMethods {
         prot: SpawnProt,
         args: A,
     ) -> mlua::Result<mlua::Thread>;
+
+    fn await_thread(
+        &self,
+        thread: mlua::Thread,
+    ) -> impl std::future::Future<Output = mlua::Result<mlua::MultiValue>> + Send;
 }
 
 impl LuaSchedulerMethods for mlua::Lua {
@@ -40,5 +45,9 @@ impl LuaSchedulerMethods for mlua::Lua {
         args: A,
     ) -> mlua::Result<mlua::Thread> {
         crate::spawn_thread(self, thread, prot, args)
+    }
+
+    async fn await_thread(&self, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
+        crate::await_thread(self, thread).await
     }
 }

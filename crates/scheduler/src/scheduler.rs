@@ -4,13 +4,17 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Scheduler {
-    pub(crate) pool: (
+    pub(crate) spawn_pool: (
         channel::Sender<(usize, ThreadInfo)>,
         channel::Receiver<(usize, ThreadInfo)>,
     ),
-    pub(crate) yield_: (
+    pub(crate) yield_pool: (
         channel::Sender<(usize, channel::Sender<mlua::MultiValue>)>,
         channel::Receiver<(usize, channel::Sender<mlua::MultiValue>)>,
+    ),
+    pub(crate) result_pool: (
+        channel::Sender<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
+        channel::Receiver<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
     ),
     pub(crate) executor: Arc<Executor<'static>>,
 
@@ -21,8 +25,9 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new() -> Self {
         Scheduler {
-            pool: channel::unbounded(),
-            yield_: channel::unbounded(),
+            spawn_pool: channel::unbounded(),
+            yield_pool: channel::unbounded(),
+            result_pool: channel::unbounded(),
             executor: Arc::new(Executor::new()),
 
             errors: Default::default(),
