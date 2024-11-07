@@ -30,12 +30,6 @@ impl Scheduler {
     }
 
     pub fn setup(self, lua: &mlua::Lua) {
-        lua.set_app_data(Scheduler {
-            pool: channel::unbounded(),
-            yield_: channel::unbounded(),
-            executor: Arc::new(Executor::new()),
-
-            errors: Default::default(),
-        });
+        lua.set_app_data(self);
     }
 }
