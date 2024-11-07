@@ -1,7 +1,7 @@
 use clap::Parser;
 use mlua_scheduler::{scheduler::Scheduler, traits::LuaSchedulerMethods};
 use smol::fs;
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 struct Cli {
