@@ -1,7 +1,7 @@
 use clap::Parser;
 use mlua_scheduler::{scheduler::Scheduler, traits::LuaSchedulerMethods};
 use smol::fs;
-use std::path::PathBuf;
+use std::{env::consts::OS, path::PathBuf};
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -25,6 +25,10 @@ fn main() {
     let lua = mlua::Lua::new();
     let scheduler = Scheduler::new().setup(&lua);
 
+    lua.globals()
+        .set("_OS", OS.to_lowercase())
+        .expect("Failed to set _OS global");
+
     mlua_task_std::inject_globals(&lua).unwrap();
 
     let thread =
@@ -35,11 +39,16 @@ fn main() {
     })
     .fallible();
 
-    if smol::block_on(lua.await_thread(thread)).is_ok() {
-        smol::block_on(scheduler_task);
+    match smol::block_on(lua.await_thread(thread)) {
+        Ok(_) => {
+            smol::block_on(scheduler_task);
 
-        std::process::exit(0);
-    } else {
-        std::process::exit(1);
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("{err}");
+
+            std::process::exit(1);
+        }
     }
 }
