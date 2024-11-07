@@ -144,7 +144,7 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
             tick_thread(thread).await?;
         }
 
-        if executor.is_empty() {
+        if executor.is_empty() & suspended_threads.is_empty() {
             break;
         };
     }
