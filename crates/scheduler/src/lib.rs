@@ -1,17 +1,22 @@
 use mlua::ExternalResult;
 use smol::{channel, Executor, Task};
-use std::{future::Future, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 pub mod functions;
 
 #[derive(Debug)]
-struct ThreadInfo(mlua::Thread, mlua::MultiValue, usize);
+struct ThreadInfo(mlua::Thread, mlua::MultiValue);
 
 #[derive(Debug)]
 pub struct Scheduler {
-    pub(crate) pool: (channel::Sender<ThreadInfo>, channel::Receiver<ThreadInfo>),
-    // short for suspend :)
-    pub(crate) sus: (channel::Sender<usize>, channel::Receiver<usize>),
+    pub(crate) pool: (
+        channel::Sender<(usize, ThreadInfo)>,
+        channel::Receiver<(usize, ThreadInfo)>,
+    ),
+    pub(crate) yield_: (
+        channel::Sender<(usize, channel::Sender<mlua::MultiValue>)>,
+        channel::Receiver<(usize, channel::Sender<mlua::MultiValue>)>,
+    ),
     pub(crate) executor: Arc<Executor<'static>>,
 
     // pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
@@ -21,7 +26,7 @@ pub struct Scheduler {
 pub fn setup_scheduler(lua: &mlua::Lua) {
     lua.set_app_data(Scheduler {
         pool: channel::unbounded(),
-        sus: channel::unbounded(),
+        yield_: channel::unbounded(),
         executor: Arc::new(Executor::new()),
 
         errors: Default::default(),
@@ -46,13 +51,20 @@ where
     executor.spawn(future)
 }
 
-pub async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<()> {
-    let sus = {
+pub async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
+    let yield_ = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
-        scheduler.sus.0.clone()
+        scheduler.yield_.0.clone()
     };
 
-    sus.send(thread.to_pointer() as usize).await.into_lua_err()
+    let (sender, receiver) = channel::bounded(1);
+
+    yield_
+        .send((thread.to_pointer() as usize, sender))
+        .await
+        .into_lua_err()?;
+
+    receiver.recv().await.into_lua_err()
 }
 
 pub fn spawn_thread<A: mlua::IntoLuaMulti>(
@@ -73,7 +85,7 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
     let thread_id = thread_inner.to_pointer() as _;
 
     spawn_future(&lua.clone(), async move {
-        pool.send(ThreadInfo(thread_inner, args_inner, thread_id))
+        pool.send((thread_id, ThreadInfo(thread_inner, args_inner)))
             .await
             .expect("Failed to send thread to scheduler")
     })
@@ -87,8 +99,8 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
     Ok(thread)
 }
 
-async fn process_thread(thread_info: ThreadInfo) -> mlua::Result<()> {
-    while let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+async fn tick_thread(thread_info: &ThreadInfo) -> mlua::Result<()> {
+    if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
         if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
             eprintln!("{err}");
         }
@@ -100,24 +112,36 @@ async fn process_thread(thread_info: ThreadInfo) -> mlua::Result<()> {
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
-    let (executor, pool, sus) = {
+    let (executor, pool, yield_) = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
         (
             Arc::clone(&scheduler.executor),
             scheduler.pool.1.clone(),
-            scheduler.sus.1.clone(),
+            scheduler.yield_.1.clone(),
         )
     };
+
+    let mut threads: HashMap<usize, ThreadInfo> = HashMap::new();
+    let mut suspended_threads: HashMap<usize, channel::Sender<mlua::MultiValue>> = HashMap::new();
 
     loop {
         executor.try_tick();
 
-        while let Ok(thread_info) = pool.try_recv() {
-            executor.spawn(process_thread(thread_info)).detach();
+        while let Ok((thread_id, thread_info)) = pool.try_recv() {
+            if let Some(sender) = suspended_threads.remove(&thread_id) {
+                sender.send(thread_info.1.clone()).await.into_lua_err()?;
+            }
+
+            threads.insert(thread_id, thread_info);
         }
 
-        while let Ok(thread_id) = sus.try_recv() {
-            // TODO: tell the scheduler to not poll this thread
+        while let Ok((thread_id, sender)) = yield_.try_recv() {
+            threads.remove(&thread_id);
+            suspended_threads.insert(thread_id, sender);
+        }
+
+        for thread in threads.values() {
+            tick_thread(thread).await?;
         }
 
         if executor.is_empty() {

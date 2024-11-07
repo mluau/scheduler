@@ -39,5 +39,8 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
 
     lua.globals().set("task", task)?;
 
+    let coroutine = lua.globals().get::<mlua::Table>("coroutine")?;
+    coroutine.set("yield", task_functions.yield_)?;
+
     Ok(())
 }
