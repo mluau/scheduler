@@ -1,7 +1,7 @@
 use mlua::ExternalResult;
 use scheduler::Scheduler;
 use smol::{channel, Task};
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{future::Future, sync::Arc};
 
 pub mod functions;
 pub mod scheduler;
@@ -118,59 +118,4 @@ fn tick_thread(thread_info: &ThreadInfo) -> Option<mlua::Result<mlua::MultiValue
     } else {
         None
     }
-}
-
-pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Arc<Scheduler>> {
-    let scheduler = Arc::clone(&lua.app_data_ref::<Arc<Scheduler>>().unwrap());
-
-    let mut threads: HashMap<usize, ThreadInfo> = HashMap::new();
-    let mut thread_yield_senders: HashMap<usize, channel::Sender<mlua::MultiValue>> =
-        HashMap::new();
-    let mut thread_result_senders: HashMap<usize, channel::Sender<mlua::Result<mlua::MultiValue>>> =
-        HashMap::new();
-
-    loop {
-        scheduler.executor.try_tick();
-
-        while let Ok((thread_id, thread_info)) = scheduler.spawn_pool.1.try_recv() {
-            if let Some(sender) = thread_yield_senders.remove(&thread_id) {
-                sender.send(thread_info.1.clone()).await.into_lua_err()?;
-            }
-
-            threads.insert(thread_id, thread_info);
-        }
-
-        while let Ok((thread_id, sender)) = scheduler.yield_pool.1.try_recv() {
-            threads.remove(&thread_id);
-            thread_yield_senders.insert(thread_id, sender);
-        }
-
-        let mut finished_threads: HashMap<usize, mlua::Result<mlua::MultiValue>> = HashMap::new();
-
-        for (thread_id, thread_info) in &threads {
-            if let Some(result) = tick_thread(&thread_info) {
-                // thread finished
-                finished_threads.insert(*thread_id, result);
-            };
-        }
-
-        while let Ok((thread_id, sender)) = scheduler.result_pool.1.try_recv() {
-            thread_result_senders.insert(thread_id, sender);
-        }
-
-        for (thread_id, thread_result) in finished_threads {
-            if let Some(sender) = thread_result_senders.remove(&thread_id) {
-                sender.send(thread_result).await.into_lua_err()?;
-            }
-
-            threads.remove(&thread_id);
-        }
-
-        if scheduler.executor.is_empty() & thread_yield_senders.is_empty() {
-            break;
-        };
-    }
-
-    lua.remove_app_data::<Arc<Scheduler>>()
-        .ok_or_else(|| mlua::Error::runtime("Scheduler not found in app data container"))
 }

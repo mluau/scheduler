@@ -6,8 +6,8 @@ const PATH: &str = "crates/task-std/examples/init.luau";
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let lua = mlua::Lua::new();
+    let scheduler = Scheduler::new().setup(&lua);
 
-    Scheduler::new().setup(&lua);
     mlua_task_std::inject_globals(&lua).unwrap();
 
     let chunk = lua
@@ -30,16 +30,7 @@ async fn main() {
     )
     .expect("Failed to spawn thread");
 
-    std::process::exit(
-        if mlua_scheduler::await_scheduler(&lua)
-            .await
-            .unwrap()
-            .errors
-            .is_empty()
-        {
-            0
-        } else {
-            1
-        },
-    )
+    scheduler.run().await.expect("Scheduler failed");
+
+    std::process::exit(if scheduler.errors.is_empty() { 0 } else { 1 })
 }
