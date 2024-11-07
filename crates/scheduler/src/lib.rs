@@ -99,14 +99,12 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
     Ok(thread)
 }
 
-async fn tick_thread(thread_info: &ThreadInfo) -> mlua::Result<()> {
+async fn tick_thread(thread_info: &ThreadInfo) {
     if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
         if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
             eprintln!("{err}");
         }
     }
-
-    Ok(())
 }
 
 pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
@@ -141,7 +139,7 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
         let mut finished_threads: Vec<usize> = Vec::new();
 
         for (thread_id, thread_info) in &threads {
-            tick_thread(&thread_info).await?;
+            tick_thread(&thread_info).await;
 
             if let mlua::ThreadStatus::Finished = thread_info.0.status() {
                 finished_threads.push(*thread_id);
