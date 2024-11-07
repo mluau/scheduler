@@ -23,7 +23,7 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
     let task = lua.create_table()?;
     task.set("spawn", task_functions.spawn)?;
     task.set("defer", task_functions.defer)?;
-    task.set("cancel", task_functions.cancel)?;
+    task.set("cancel", task_functions.cancel.clone())?;
     task.set("wait", wait)?;
     task.set("delay", delay)?;
 
@@ -45,6 +45,7 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
     coroutine.set("yield", task_functions.yield_)?;
     coroutine.set("wrap", wrap)?;
     coroutine.set("resume", resume)?;
+    coroutine.set("close", task_functions.cancel)?;
 
     Ok(())
 }

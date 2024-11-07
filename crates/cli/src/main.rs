@@ -39,11 +39,16 @@ fn main() {
     })
     .fallible();
 
-    if smol::block_on(lua.await_thread(thread)).is_ok() {
-        smol::block_on(scheduler_task);
+    match smol::block_on(lua.await_thread(thread)) {
+        Ok(_) => {
+            smol::block_on(scheduler_task);
 
-        std::process::exit(0);
-    } else {
-        std::process::exit(1);
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("{err}");
+
+            std::process::exit(1);
+        }
     }
 }
