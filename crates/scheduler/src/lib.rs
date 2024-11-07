@@ -1,38 +1,14 @@
 use mlua::ExternalResult;
-use smol::{channel, Executor, Task};
+use scheduler::Scheduler;
+use smol::{channel, Task};
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 pub mod functions;
-pub mod lua_traits;
+pub mod scheduler;
+pub mod traits;
 
 #[derive(Debug)]
-struct ThreadInfo(mlua::Thread, mlua::MultiValue);
-
-#[derive(Debug)]
-pub struct Scheduler {
-    pub(crate) pool: (
-        channel::Sender<(usize, ThreadInfo)>,
-        channel::Receiver<(usize, ThreadInfo)>,
-    ),
-    pub(crate) yield_: (
-        channel::Sender<(usize, channel::Sender<mlua::MultiValue>)>,
-        channel::Receiver<(usize, channel::Sender<mlua::MultiValue>)>,
-    ),
-    pub(crate) executor: Arc<Executor<'static>>,
-
-    // pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
-    pub errors: Vec<mlua::Error>,
-}
-
-pub fn setup_scheduler(lua: &mlua::Lua) {
-    lua.set_app_data(Scheduler {
-        pool: channel::unbounded(),
-        yield_: channel::unbounded(),
-        executor: Arc::new(Executor::new()),
-
-        errors: Default::default(),
-    });
-}
+pub(crate) struct ThreadInfo(mlua::Thread, mlua::MultiValue);
 
 #[derive(Debug, Clone, Copy)]
 pub enum SpawnProt {

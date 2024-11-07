@@ -1,4 +1,4 @@
-use mlua_scheduler::lua_traits::LuaSchedulerMethods;
+use mlua_scheduler::{scheduler::Scheduler, traits::LuaSchedulerMethods};
 use tokio::fs;
 
 const PATH: &str = "crates/task-std/examples/init.luau";
@@ -7,7 +7,7 @@ const PATH: &str = "crates/task-std/examples/init.luau";
 async fn main() {
     let lua = mlua::Lua::new();
 
-    mlua_scheduler::setup_scheduler(&lua);
+    Scheduler::new().setup(&lua);
     mlua_task_std::inject_globals(&lua).unwrap();
 
     let chunk = lua

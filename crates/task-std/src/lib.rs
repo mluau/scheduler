@@ -1,4 +1,4 @@
-use mlua_scheduler::lua_traits::LuaSchedulerMethods;
+use mlua_scheduler::traits::LuaSchedulerMethods;
 use std::time::{Duration, Instant};
 
 pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
