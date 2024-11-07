@@ -50,27 +50,29 @@ fn spawn_thread<A: mlua::IntoLuaMulti>(
         return Err(mlua::Error::CoroutineUnresumable);
     }
 
-    let args = args.into_lua_multi(lua)?;
-
     let scheduler = Arc::clone(&lua.app_data_ref::<Arc<Scheduler>>().unwrap());
 
+    let args = args.into_lua_multi(lua)?;
     let thread_inner = thread.clone();
     let args_inner = args.clone();
     let thread_id = thread_inner.to_pointer() as _;
 
-    spawn_future(&lua.clone(), async move {
-        scheduler
-            .spawn_pool
-            .0
-            .send((thread_id, ThreadInfo(thread_inner, args_inner)))
-            .await
-            .expect("Failed to send thread to scheduler")
-    })
-    .detach();
-
     if matches!(prot, SpawnProt::Spawn) {
         // poll immediately
         thread.resume::<()>(args)?;
+    }
+
+    if let mlua::ThreadStatus::Resumable = thread.status() {
+        // the above poll could finish the thread if it doesnt yield
+        spawn_future(&lua.clone(), async move {
+            scheduler
+                .spawn_pool
+                .0
+                .send((thread_id, ThreadInfo(thread_inner, args_inner)))
+                .await
+                .expect("Failed to send thread to scheduler")
+        })
+        .detach();
     }
 
     Ok(thread)
