@@ -4,7 +4,7 @@ use std::{future::Future, sync::Arc};
 pub mod functions;
 
 #[derive(Debug)]
-struct ThreadInfo(mlua::RegistryKey, mlua::MultiValue);
+struct ThreadInfo(mlua::Thread, mlua::MultiValue);
 
 #[derive(Debug)]
 pub struct Scheduler {
@@ -57,17 +57,11 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
 
     let thread_inner = thread.clone();
     let args_inner = args.clone();
-    let lua_inner = lua.clone();
 
     spawn_future(&lua.clone(), async move {
-        pool.send(ThreadInfo(
-            lua_inner
-                .create_registry_value(thread_inner)
-                .expect("Failed to send thread to registry"),
-            args_inner,
-        ))
-        .await
-        .expect("Failed to send thread to scheduler")
+        pool.send(ThreadInfo(thread_inner, args_inner))
+            .await
+            .expect("Failed to send thread to scheduler")
     })
     .detach();
 
@@ -79,15 +73,14 @@ pub fn spawn_thread<A: mlua::IntoLuaMulti>(
     Ok(thread)
 }
 
-async fn process_thread(lua: &mlua::Lua, thread_info: ThreadInfo) -> mlua::Result<()> {
-    let thread: mlua::Thread = lua.registry_value(&thread_info.0)?;
-    lua.remove_registry_value(thread_info.0)?;
-
-    if let mlua::ThreadStatus::Resumable = thread.status() {
-        if let Err(err) = thread.into_async::<()>(thread_info.1).await {
+async fn process_thread(thread_info: ThreadInfo) -> mlua::Result<()> {
+    while let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+        if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
             eprintln!("{err}");
         }
-    };
+
+        smol::future::yield_now().await;
+    }
 
     Ok(())
 }
@@ -102,18 +95,14 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
         executor.try_tick();
 
         while let Ok(thread_info) = pool.try_recv() {
-            let lua_inner = lua.clone();
-
             executor
                 .spawn(async move {
-                    process_thread(&lua_inner, thread_info)
+                    process_thread(thread_info)
                         .await
                         .expect("Failed to process thread");
                 })
                 .detach();
         }
-
-        // smol::future::yield_now().await;
 
         if executor.is_empty() {
             break;
