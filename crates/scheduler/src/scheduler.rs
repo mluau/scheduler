@@ -17,7 +17,7 @@ pub struct Scheduler {
         channel::Sender<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
         channel::Receiver<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
     ),
-    pub(crate) executor: Executor<'static>,
+    pub executor: Executor<'static>,
 
     // pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
     pub errors: Vec<mlua::Error>,
@@ -81,6 +81,10 @@ impl Scheduler {
             }
 
             for (thread_id, thread_result) in finished_threads {
+                if let Err(err) = &thread_result {
+                    eprintln!("{err}");
+                }
+
                 if let Some(sender) = thread_result_senders.remove(&thread_id) {
                     sender.send(thread_result).await.into_lua_err()?;
                 }
