@@ -30,12 +30,14 @@ fn main() {
     let thread =
         smol::block_on(spawn_script(lua.clone(), cli.path)).expect("Failed to spawn script");
 
-    smol::spawn(async move {
+    let scheduler_task = smol::spawn(async move {
         scheduler.run().await.expect("Scheduler failed");
     })
-    .detach();
+    .fallible();
 
     if smol::block_on(lua.await_thread(thread)).is_ok() {
+        smol::block_on(scheduler_task);
+
         std::process::exit(0);
     } else {
         std::process::exit(1);
