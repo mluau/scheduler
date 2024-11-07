@@ -1,3 +1,4 @@
+use mlua_scheduler::lua_traits::LuaSchedulerMethods;
 use std::time::{Duration, Instant};
 
 pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
@@ -31,18 +32,14 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
                     })
                     .into_inner();
 
-                mlua_scheduler::spawn_future(&lua.clone(), async move {
-                    smol::Timer::after(Duration::from_secs_f64(secs)).await;
+                lua.clone()
+                    .spawn_future(async move {
+                        smol::Timer::after(Duration::from_secs_f64(secs)).await;
 
-                    mlua_scheduler::spawn_thread(
-                        &lua,
-                        thread,
-                        mlua_scheduler::SpawnProt::Spawn,
-                        args,
-                    )
-                    .expect("Failed to spawn thread");
-                })
-                .detach();
+                        lua.spawn_thread(thread, mlua_scheduler::SpawnProt::Spawn, args)
+                            .expect("Failed to spawn thread");
+                    })
+                    .detach();
 
                 Ok(())
             },
@@ -59,19 +56,14 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
             let thread = lua.create_thread(func)?;
 
             lua.create_function(move |lua: &mlua::Lua, args: mlua::MultiValue| {
-                mlua_scheduler::spawn_thread(
-                    lua,
-                    thread.clone(),
-                    mlua_scheduler::SpawnProt::Spawn,
-                    args,
-                )
+                lua.spawn_thread(thread.clone(), mlua_scheduler::SpawnProt::Spawn, args)
             })
         })?,
     )?;
     coroutine.set(
         "resume",
         lua.create_function(|lua, (thread, args): (mlua::Thread, mlua::MultiValue)| {
-            mlua_scheduler::spawn_thread(lua, thread, mlua_scheduler::SpawnProt::Spawn, args)
+            lua.spawn_thread(thread, mlua_scheduler::SpawnProt::Spawn, args)
         })?,
     )?;
 

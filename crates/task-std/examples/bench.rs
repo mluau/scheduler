@@ -1,3 +1,4 @@
+use mlua_scheduler::lua_traits::LuaSchedulerMethods;
 use tokio::fs;
 
 const PATH: &str = "crates/task-std/examples/bench.luau";
@@ -17,8 +18,7 @@ async fn main() {
         )
         .set_name(fs::canonicalize(PATH).await.unwrap().to_string_lossy());
 
-    mlua_scheduler::spawn_thread(
-        &lua,
+    lua.spawn_thread(
         lua.create_thread(
             chunk
                 .into_function()

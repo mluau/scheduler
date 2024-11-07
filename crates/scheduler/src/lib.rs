@@ -3,6 +3,7 @@ use smol::{channel, Executor, Task};
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 pub mod functions;
+pub mod lua_traits;
 
 #[derive(Debug)]
 struct ThreadInfo(mlua::Thread, mlua::MultiValue);
@@ -39,7 +40,7 @@ pub enum SpawnProt {
     Defer,
 }
 
-pub fn spawn_future<T>(lua: &mlua::Lua, future: impl Future<Output = T> + Send + 'static) -> Task<T>
+fn spawn_future<T>(lua: &mlua::Lua, future: impl Future<Output = T> + Send + 'static) -> Task<T>
 where
     T: Send + 'static,
 {
@@ -51,7 +52,7 @@ where
     executor.spawn(future)
 }
 
-pub async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
+async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
     let yield_ = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
         scheduler.yield_.0.clone()
@@ -67,7 +68,7 @@ pub async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result
     receiver.recv().await.into_lua_err()
 }
 
-pub fn spawn_thread<A: mlua::IntoLuaMulti>(
+fn spawn_thread<A: mlua::IntoLuaMulti>(
     lua: &mlua::Lua,
     thread: mlua::Thread,
     prot: SpawnProt,
