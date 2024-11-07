@@ -1,7 +1,7 @@
 use clap::Parser;
 use mlua_scheduler::{scheduler::Scheduler, traits::LuaSchedulerMethods};
 use smol::fs;
-use std::path::PathBuf;
+use std::{env::consts::OS, path::PathBuf};
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -24,6 +24,10 @@ fn main() {
     let cli = Cli::parse();
     let lua = mlua::Lua::new();
     let scheduler = Scheduler::new().setup(&lua);
+
+    lua.globals()
+        .set("_OS", OS.to_lowercase())
+        .expect("Failed to set _OS global");
 
     mlua_task_std::inject_globals(&lua).unwrap();
 
