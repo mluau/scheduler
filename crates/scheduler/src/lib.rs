@@ -81,8 +81,6 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
     let mut processed_threads: Vec<ThreadInfo> = Vec::new();
 
     'main: loop {
-        smol::future::yield_now().await;
-
         while let Ok(thread_info) = pool.try_recv() {
             threads.push(thread_info);
         }
