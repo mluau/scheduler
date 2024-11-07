@@ -85,12 +85,18 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
             threads.push(thread_info);
         }
 
-        for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Spawn)) {
-            process_thread(lua, thread_info).await?;
-        }
+        {
+            let (spawn_threads, defer_threads): (Vec<_>, Vec<_>) = threads
+                .iter()
+                .partition(|x| matches!(x.2, SpawnProt::Spawn));
 
-        for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Defer)) {
-            process_thread(lua, thread_info).await?;
+            for thread_info in spawn_threads {
+                process_thread(lua, thread_info).await?;
+            }
+
+            for thread_info in defer_threads {
+                process_thread(lua, thread_info).await?;
+            }
         }
 
         processed_threads.append(&mut threads);
