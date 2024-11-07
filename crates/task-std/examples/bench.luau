@@ -11,9 +11,10 @@ for current = 1, batches do
 
 	for i = 1, amount / batches do
 		task.spawn(function()
-			task.wait(0.5)
+			task.wait(0.1)
 
 			if i == amount / batches then
+				assert(coroutine.status(thread) == "suspended")
 				task.spawn(thread)
 			end
 		end)
