@@ -1,3 +1,7 @@
+--[[
+@from https://github.com/lune-org/lune/blob/main/tests/task/cancel.luau
+]]
+
 -- Cancel should cancel any deferred or delayed threads
 
 local flag: boolean = false
