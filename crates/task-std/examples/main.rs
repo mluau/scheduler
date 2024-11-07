@@ -34,6 +34,7 @@ async fn main() {
     std::process::exit(
         if mlua_scheduler::await_scheduler(&lua)
             .await
+            .unwrap()
             .errors
             .is_empty()
         {

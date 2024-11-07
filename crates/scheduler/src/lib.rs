@@ -3,7 +3,7 @@ use smol::channel;
 pub mod functions;
 
 #[derive(Debug)]
-struct ThreadInfo(mlua::Thread, mlua::MultiValue, SpawnProt);
+struct ThreadInfo(mlua::RegistryKey, mlua::MultiValue, SpawnProt);
 
 #[derive(Debug)]
 pub struct Scheduler {
@@ -42,9 +42,13 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
     let thread_inner = thread.clone();
     let args_inner = args.clone();
 
-    pool.send(ThreadInfo(thread_inner, args_inner, prot))
-        .await
-        .expect("Failed to send thread to scheduler");
+    pool.send(ThreadInfo(
+        lua.create_registry_value(thread_inner)?,
+        args_inner,
+        prot,
+    ))
+    .await
+    .expect("Failed to send thread to scheduler");
 
     if matches!(prot, SpawnProt::Spawn) {
         // poll immediately
@@ -54,18 +58,20 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
     Ok(thread)
 }
 
-async fn process_thread(thread_info: &ThreadInfo) {
-    if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+async fn process_thread(lua: &mlua::Lua, thread_info: &ThreadInfo) -> mlua::Result<()> {
+    let thread: mlua::Thread = lua.registry_value(&thread_info.0)?;
+
+    if let mlua::ThreadStatus::Resumable = thread.status() {
         // poll thread
-        if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
+        if let Err(err) = thread.resume::<()>(thread_info.1.clone()) {
             eprintln!("{err}");
         }
-
-        smol::future::yield_now().await;
     };
+
+    Ok(())
 }
 
-pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
+pub async fn await_scheduler(lua: &mlua::Lua) -> mlua::Result<Scheduler> {
     let pool = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
         scheduler.pool.1.clone()
@@ -75,11 +81,11 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
 
     'main: loop {
         for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Spawn)) {
-            process_thread(thread_info).await;
+            process_thread(lua, thread_info).await?;
         }
 
         for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Defer)) {
-            process_thread(thread_info).await;
+            process_thread(lua, thread_info).await?;
         }
 
         while let Ok(thread_info) = pool.try_recv() {
@@ -89,7 +95,9 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
         smol::future::yield_now().await;
 
         for thread_info in &threads {
-            if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+            let thread: mlua::Thread = lua.registry_value(&thread_info.0)?;
+
+            if let mlua::ThreadStatus::Resumable = thread.status() {
                 continue 'main;
             }
         }
@@ -97,5 +105,6 @@ pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
         break 'main;
     }
 
-    lua.remove_app_data::<Scheduler>().unwrap()
+    lua.remove_app_data::<Scheduler>()
+        .ok_or_else(|| mlua::Error::runtime("Scheduler not found in app data container"))
 }

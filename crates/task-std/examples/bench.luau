@@ -1,5 +1,5 @@
 local started = os.clock()
-local amount = 100000
+local amount = 1000000
 for i = 1, amount do
 	task.spawn(function()
 		task.wait(5)
