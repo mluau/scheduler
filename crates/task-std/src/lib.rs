@@ -41,6 +41,21 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
 
     let coroutine = lua.globals().get::<mlua::Table>("coroutine")?;
     coroutine.set("yield", task_functions.yield_)?;
+    coroutine.set(
+        "wrap",
+        lua.create_function(|lua, func: mlua::Function| {
+            let thread = lua.create_thread(func)?;
+
+            lua.create_function(move |lua: &mlua::Lua, args: mlua::MultiValue| {
+                mlua_scheduler::spawn_thread(
+                    lua,
+                    thread.clone(),
+                    mlua_scheduler::SpawnProt::Spawn,
+                    args,
+                )
+            })
+        })?,
+    )?;
 
     Ok(())
 }
