@@ -1,3 +1,6 @@
+-- for testing
+local task = task or require("@lune/task")
+
 local started = os.clock()
 local amount = 1000000
 for i = 1, amount do
