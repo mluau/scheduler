@@ -25,6 +25,9 @@ local function printDebug(...: string)
 end
 
 task.defer(function()
+	task.defer(function()
+		printDebug("This was also deffered!")
+	end)
 	printDebug("This was deffered!")
 end)
 

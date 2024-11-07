@@ -1,41 +1,26 @@
-use async_task::Runnable;
-use smol::future::block_on;
-use std::sync::{Arc, Mutex};
+use smol::channel;
 
 pub mod functions;
-pub(crate) mod util;
+
+#[derive(Debug)]
+struct ThreadInfo(mlua::Thread, mlua::MultiValue, SpawnProt);
 
 #[derive(Debug)]
 pub struct Scheduler {
-    pub(crate) spawn_channel: (
-        smol::channel::Sender<Runnable>,
-        smol::channel::Receiver<Runnable>,
-    ),
-    pub(crate) defer_channel: (
-        smol::channel::Sender<Runnable>,
-        smol::channel::Receiver<Runnable>,
-    ),
+    pub(crate) pool: (channel::Sender<ThreadInfo>, channel::Receiver<ThreadInfo>),
 
-    pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
+    // pub(crate) threads: Arc<Mutex<Vec<mlua::Thread>>>,
     pub errors: Vec<mlua::Error>,
 }
 
-impl Default for Scheduler {
-    fn default() -> Self {
-        Self {
-            spawn_channel: smol::channel::unbounded(),
-            defer_channel: smol::channel::unbounded(),
-
-            threads: Default::default(),
-            errors: Default::default(),
-        }
-    }
-}
-
 pub fn setup_scheduler(lua: &mlua::Lua) {
-    lua.set_app_data(Scheduler::default());
+    lua.set_app_data(Scheduler {
+        pool: channel::unbounded(),
+        errors: Default::default(),
+    });
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum SpawnProt {
     Spawn,
     Defer,
@@ -47,114 +32,70 @@ pub async fn spawn_local<A: mlua::IntoLuaMulti>(
     prot: SpawnProt,
     args: A,
 ) -> mlua::Result<mlua::Thread> {
-    let thread_inner = thread.clone();
     let args = args.into_lua_multi(lua)?;
 
-    let sender = {
+    let pool = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
-        scheduler.threads.lock().unwrap().push(thread.clone());
-        match prot {
-            SpawnProt::Spawn => scheduler.spawn_channel.0.clone(),
-            SpawnProt::Defer => scheduler.defer_channel.0.clone(),
-        }
+        scheduler.pool.0.clone()
     };
 
-    let lua_inner = lua.clone();
-    let fake_yield = if matches!(prot, SpawnProt::Defer) {
-        false
-    } else {
-        match thread.resume::<mlua::MultiValue>(args.clone()) {
-            Ok(v) => {
-                if v.get(0).is_some_and(util::is_poll_pending) {
-                    false
-                } else {
-                    true
-                }
-            }
-            Err(_) => true,
-        }
-    };
+    let thread_inner = thread.clone();
+    let args_inner = args.clone();
 
-    let (runnable, task) = async_task::spawn(
-        async move {
-            match thread_inner.status() {
-                mlua::ThreadStatus::Resumable => {
-                    if fake_yield {
-                        smol::future::yield_now().await;
-                    }
+    pool.send(ThreadInfo(thread_inner, args_inner, prot))
+        .await
+        .expect("Failed to send thread to scheduler");
 
-                    let stream = thread_inner.into_async::<()>(args);
-
-                    if let Err(err) = stream.await {
-                        eprintln!("{err}");
-
-                        let mut scheduler = lua_inner.app_data_mut::<Scheduler>().unwrap();
-                        scheduler.errors.push(err.clone());
-                    };
-                }
-                _ => {}
-            }
-        },
-        move |runnable: Runnable| {
-            // let waker = runnable.waker();
-
-            if let Err(err) = sender.send_blocking(runnable) {
-                eprintln!("{err}");
-            }
-
-            // if let Err(err) = sender_inner.lock().unwrap().try_send(runnable) {
-            //     if matches!(err, smol::channel::TrySendError::Full(_)) {
-            //         waker.wake();
-            //     } else {
-            //         eprintln!("{err}");
-            //     }
-            // }
-        },
-    );
-
-    runnable.schedule();
-    task.detach();
+    if matches!(prot, SpawnProt::Spawn) {
+        // poll immediately
+        thread.resume::<()>(args)?;
+    }
 
     Ok(thread)
 }
 
-pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
-    smol::future::yield_now().await;
+async fn process_thread(thread_info: &ThreadInfo) {
+    if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+        // poll thread
+        if let Err(err) = thread_info.0.resume::<()>(thread_info.1.clone()) {
+            eprintln!("{err}");
+        }
 
-    let (threads, spawn_recv, defer_recv) = {
+        smol::future::yield_now().await;
+    };
+}
+
+pub async fn await_scheduler(lua: &mlua::Lua) -> Scheduler {
+    let pool = {
         let scheduler = lua.app_data_ref::<Scheduler>().unwrap();
-        (
-            Arc::clone(&scheduler.threads),
-            scheduler.spawn_channel.1.clone(),
-            scheduler.defer_channel.1.clone(),
-        )
+        scheduler.pool.1.clone()
     };
 
-    block_on(async move {
-        'main: loop {
-            while let Ok(runnable) = spawn_recv.try_recv() {
-                smol::spawn(async move {
-                    runnable.run();
-                })
-                .detach();
-            }
+    let mut threads: Vec<ThreadInfo> = Vec::new();
 
-            while let Ok(runnable) = defer_recv.try_recv() {
-                smol::spawn(async move {
-                    runnable.run();
-                })
-                .detach();
-            }
-
-            for thread in threads.lock().unwrap().iter() {
-                if !matches!(thread.status(), mlua::ThreadStatus::Finished) {
-                    continue 'main;
-                }
-            }
-
-            break 'main;
+    'main: loop {
+        for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Spawn)) {
+            process_thread(thread_info).await;
         }
-    });
+
+        for thread_info in threads.iter().filter(|x| matches!(x.2, SpawnProt::Defer)) {
+            process_thread(thread_info).await;
+        }
+
+        while let Ok(thread_info) = pool.try_recv() {
+            threads.push(thread_info);
+        }
+
+        smol::future::yield_now().await;
+
+        for thread_info in &threads {
+            if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+                continue 'main;
+            }
+        }
+
+        break 'main;
+    }
 
     lua.remove_app_data::<Scheduler>().unwrap()
 }
