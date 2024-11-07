@@ -84,7 +84,7 @@ async fn process_thread(lua: &mlua::Lua, thread_info: ThreadInfo) -> mlua::Resul
     lua.remove_registry_value(thread_info.0)?;
 
     if let mlua::ThreadStatus::Resumable = thread.status() {
-        if let Err(err) = thread.into_async::<()>(thread_info.1.clone()).await {
+        if let Err(err) = thread.into_async::<()>(thread_info.1).await {
             eprintln!("{err}");
         }
     };
