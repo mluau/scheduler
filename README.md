@@ -1,3 +1,3 @@
 # mlua_scheduler
 
-An scheduler for mlua which uses the tokio runtime
+A Roblox-like scheduler for mlua, compatible the smol runtime crate
