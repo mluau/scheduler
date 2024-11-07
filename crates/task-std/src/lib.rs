@@ -32,16 +32,18 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
                     })
                     .into_inner();
 
+                let thread_inner = thread.clone();
+
                 lua.clone()
                     .spawn_future(async move {
                         smol::Timer::after(Duration::from_secs_f64(secs)).await;
 
-                        lua.spawn_thread(thread, mlua_scheduler::SpawnProt::Spawn, args)
+                        lua.spawn_thread(thread_inner, mlua_scheduler::SpawnProt::Spawn, args)
                             .expect("Failed to spawn thread");
                     })
                     .detach();
 
-                Ok(())
+                Ok(thread)
             },
         )?,
     )?;
