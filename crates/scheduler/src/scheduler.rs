@@ -92,7 +92,7 @@ impl Scheduler {
                 threads.remove(&thread_id);
             }
 
-            if self.executor.is_empty() & thread_yield_senders.is_empty() {
+            if self.executor.is_empty() & thread_yield_senders.is_empty() & threads.is_empty() {
                 break;
             };
         }
