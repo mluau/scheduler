@@ -68,6 +68,12 @@ pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
             })
         })?,
     )?;
+    coroutine.set(
+        "resume",
+        lua.create_function(|lua, (thread, args): (mlua::Thread, mlua::MultiValue)| {
+            mlua_scheduler::spawn_thread(lua, thread, mlua_scheduler::SpawnProt::Spawn, args)
+        })?,
+    )?;
 
     Ok(())
 }
