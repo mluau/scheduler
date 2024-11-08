@@ -53,7 +53,11 @@ impl Scheduler {
         > = HashMap::new();
 
         loop {
-            self.executor.try_tick();
+            'tick: for _ in 0..10 {
+                if !self.executor.try_tick() {
+                    break 'tick;
+                }
+            }
 
             while let Ok((thread_id, thread_info)) = self.spawn_pool.1.try_recv() {
                 if let Some(sender) = thread_yield_senders.remove(&thread_id) {
