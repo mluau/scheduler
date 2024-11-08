@@ -88,6 +88,7 @@ impl Scheduler {
             }
 
             while let Ok((thread_id, thread_result)) = self.result_pool.1.try_recv() {
+                threads.shift_remove(&thread_id);
                 finished_threads.insert(thread_id, thread_result);
             }
 
