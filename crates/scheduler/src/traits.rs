@@ -24,6 +24,11 @@ pub trait LuaSchedulerMethods {
         &self,
         thread: mlua::Thread,
     ) -> impl std::future::Future<Output = mlua::Result<mlua::MultiValue>> + Send;
+
+    fn cancel_thread(
+        &self,
+        thread: mlua::Thread,
+    ) -> impl std::future::Future<Output = mlua::Result<()>> + Send;
 }
 
 impl LuaSchedulerMethods for mlua::Lua {
@@ -49,5 +54,9 @@ impl LuaSchedulerMethods for mlua::Lua {
 
     async fn await_thread(&self, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
         crate::await_thread(self, thread).await
+    }
+
+    async fn cancel_thread(&self, thread: mlua::Thread) -> mlua::Result<()> {
+        crate::cancel_thread(self, thread).await
     }
 }
