@@ -1,4 +1,5 @@
 use crate::ThreadInfo;
+use indexmap::IndexMap;
 use mlua::ExternalResult;
 use smol::{channel, Executor};
 use std::{collections::HashMap, sync::Arc};
@@ -44,7 +45,7 @@ impl Scheduler {
     }
 
     pub async fn run(&self) -> mlua::Result<()> {
-        let mut threads: HashMap<usize, ThreadInfo> = HashMap::new();
+        let mut threads: IndexMap<usize, ThreadInfo> = IndexMap::new();
         let mut finished_threads: HashMap<usize, mlua::Result<mlua::MultiValue>> = HashMap::new();
 
         let mut thread_yield_senders: HashMap<usize, channel::Sender<mlua::MultiValue>> =
@@ -62,16 +63,16 @@ impl Scheduler {
                     sender.send(thread_info.1.clone()).await.into_lua_err()?;
                 }
 
-                threads.insert(thread_id, thread_info);
+                threads.insert_sorted(thread_id, thread_info);
             }
 
             while let Ok((thread_id, sender)) = self.yield_pool.1.try_recv() {
-                threads.remove(&thread_id);
+                threads.shift_remove(&thread_id);
                 thread_yield_senders.insert(thread_id, sender);
             }
 
             while let Ok(thread_id) = self.cancel_pool.1.try_recv() {
-                threads.remove(&thread_id);
+                threads.shift_remove(&thread_id);
             }
 
             for (thread_id, thread_info) in &threads {
@@ -95,7 +96,7 @@ impl Scheduler {
                         eprintln!("{err}");
                     }
 
-                    threads.remove(&thread_id);
+                    threads.shift_remove(thread_id);
                 }
 
                 if let Some(sender) = thread_result_senders.remove(&thread_id) {
