@@ -1,30 +1,31 @@
 use crate::ThreadInfo;
+use flume::{unbounded, Receiver, Sender};
 use indexmap::IndexMap;
 use mlua::ExternalResult;
-use smol::{channel, Executor};
+use smol::Executor;
 use std::{collections::HashMap, sync::Arc};
 
-pub(crate) type Pool<T> = (channel::Sender<T>, channel::Receiver<T>);
+pub(crate) type Pool<T> = (Sender<T>, Receiver<T>);
 pub(crate) type ThreadPool<T> = Pool<(usize, T)>;
 
 #[derive(Debug)]
 pub struct Scheduler {
     pub(crate) spawn_pool: ThreadPool<ThreadInfo>,
     pub(crate) result_pool: ThreadPool<mlua::Result<mlua::MultiValue>>,
-    pub(crate) yield_pool: ThreadPool<channel::Sender<mlua::MultiValue>>,
+    pub(crate) yield_pool: ThreadPool<Sender<mlua::MultiValue>>,
     pub(crate) cancel_pool: Pool<usize>,
-    pub(crate) result_sender_pool: ThreadPool<channel::Sender<mlua::Result<mlua::MultiValue>>>,
+    pub(crate) result_sender_pool: ThreadPool<Sender<mlua::Result<mlua::MultiValue>>>,
     pub executor: Executor<'static>,
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
         Self {
-            spawn_pool: channel::unbounded(),
-            result_pool: channel::unbounded(),
-            yield_pool: channel::unbounded(),
-            cancel_pool: channel::unbounded(),
-            result_sender_pool: channel::unbounded(),
+            spawn_pool: unbounded(),
+            result_pool: unbounded(),
+            yield_pool: unbounded(),
+            cancel_pool: unbounded(),
+            result_sender_pool: unbounded(),
             executor: Executor::new(),
         }
     }
@@ -45,12 +46,9 @@ impl Scheduler {
         let mut threads: IndexMap<usize, ThreadInfo> = IndexMap::new();
         let mut finished_threads: HashMap<usize, mlua::Result<mlua::MultiValue>> = HashMap::new();
 
-        let mut thread_yield_senders: HashMap<usize, channel::Sender<mlua::MultiValue>> =
+        let mut thread_yield_senders: HashMap<usize, Sender<mlua::MultiValue>> = HashMap::new();
+        let mut thread_result_senders: HashMap<usize, Sender<mlua::Result<mlua::MultiValue>>> =
             HashMap::new();
-        let mut thread_result_senders: HashMap<
-            usize,
-            channel::Sender<mlua::Result<mlua::MultiValue>>,
-        > = HashMap::new();
 
         loop {
             'tick: for _ in 0..10 {
@@ -59,20 +57,23 @@ impl Scheduler {
                 }
             }
 
-            while let Ok((thread_id, thread_info)) = self.spawn_pool.1.try_recv() {
+            for (thread_id, thread_info) in self.spawn_pool.1.try_iter() {
                 if let Some(sender) = thread_yield_senders.remove(&thread_id) {
-                    sender.send(thread_info.1.clone()).await.into_lua_err()?;
+                    sender
+                        .send_async(thread_info.1.clone())
+                        .await
+                        .into_lua_err()?;
                 }
 
                 threads.insert_sorted(thread_id, thread_info);
             }
 
-            while let Ok((thread_id, sender)) = self.yield_pool.1.try_recv() {
+            for (thread_id, sender) in self.yield_pool.1.try_iter() {
                 threads.shift_remove(&thread_id);
                 thread_yield_senders.insert(thread_id, sender);
             }
 
-            while let Ok(thread_id) = self.cancel_pool.1.try_recv() {
+            for thread_id in self.cancel_pool.1.try_iter() {
                 threads.shift_remove(&thread_id);
             }
 
@@ -83,11 +84,11 @@ impl Scheduler {
                 };
             }
 
-            while let Ok((thread_id, sender)) = self.result_sender_pool.1.try_recv() {
+            for (thread_id, sender) in self.result_sender_pool.1.try_iter() {
                 thread_result_senders.insert(thread_id, sender);
             }
 
-            while let Ok((thread_id, thread_result)) = self.result_pool.1.try_recv() {
+            for (thread_id, thread_result) in self.result_pool.1.try_iter() {
                 threads.shift_remove(&thread_id);
                 finished_threads.insert(thread_id, thread_result);
             }
@@ -102,7 +103,10 @@ impl Scheduler {
                 }
 
                 if let Some(sender) = thread_result_senders.remove(thread_id) {
-                    sender.send(thread_result.clone()).await.into_lua_err()?;
+                    sender
+                        .send_async(thread_result.clone())
+                        .await
+                        .into_lua_err()?;
                 }
             }
 

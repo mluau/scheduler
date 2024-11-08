@@ -7,6 +7,7 @@ edition = "2021"
 mlua = { version = "0.10.0", features = ["luau", "async", "send"] }
 smol = "2.0.2"
 indexmap = "2.6.0"
+flume = "0.11.1"
 # async-task = "4.7.1"
 # flume = "0.11.1"
 

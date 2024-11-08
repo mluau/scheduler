@@ -1,6 +1,7 @@
+use flume::bounded;
 use mlua::ExternalResult;
 use scheduler::Scheduler;
-use smol::{channel, Task};
+use smol::Task;
 use std::{future::Future, sync::Arc};
 
 pub mod functions;
@@ -28,16 +29,16 @@ where
 async fn yield_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<mlua::MultiValue> {
     let scheduler = Arc::clone(&lua.app_data_ref::<Arc<Scheduler>>().unwrap());
 
-    let (sender, receiver) = channel::bounded(1);
+    let (sender, receiver) = bounded(1);
 
     scheduler
         .yield_pool
         .0
-        .send((thread.to_pointer() as usize, sender))
+        .send_async((thread.to_pointer() as usize, sender))
         .await
         .into_lua_err()?;
 
-    receiver.recv().await.into_lua_err()
+    receiver.recv_async().await.into_lua_err()
 }
 
 fn spawn_thread<A: mlua::IntoLuaMulti>(
@@ -68,7 +69,7 @@ fn spawn_thread<A: mlua::IntoLuaMulti>(
                 scheduler_inner
                     .result_pool
                     .0
-                    .send((thread_id, result))
+                    .send_async((thread_id, result))
                     .await
                     .expect("Failed to send thread to scheduler")
             })
@@ -87,7 +88,7 @@ fn spawn_thread<A: mlua::IntoLuaMulti>(
             scheduler
                 .spawn_pool
                 .0
-                .send((thread_id, thread_info))
+                .send_async((thread_id, thread_info))
                 .await
                 .expect("Failed to send thread to scheduler")
         })
@@ -101,26 +102,31 @@ async fn await_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<mlu
     let scheduler = Arc::clone(&lua.app_data_ref::<Arc<Scheduler>>().unwrap());
 
     let thread_id = thread.to_pointer() as _;
-    let (sender, receiver) = channel::bounded(1);
+    let (sender, receiver) = bounded(1);
 
     spawn_future(&lua.clone(), async move {
         scheduler
             .result_sender_pool
             .0
-            .send((thread_id, sender))
+            .send_async((thread_id, sender))
             .await
             .expect("Failed to send thread to scheduler")
     })
     .detach();
 
-    receiver.recv().await.into_lua_err()?
+    receiver.recv_async().await.into_lua_err()?
 }
 
 async fn cancel_thread(lua: &mlua::Lua, thread: mlua::Thread) -> mlua::Result<()> {
     let scheduler = Arc::clone(&lua.app_data_ref::<Arc<Scheduler>>().unwrap());
     let thread_id = thread.to_pointer() as _;
 
-    scheduler.cancel_pool.0.send(thread_id).await.into_lua_err()
+    scheduler
+        .cancel_pool
+        .0
+        .send_async(thread_id)
+        .await
+        .into_lua_err()
 }
 
 fn tick_thread(thread_info: &ThreadInfo) -> Option<mlua::Result<mlua::MultiValue>> {
