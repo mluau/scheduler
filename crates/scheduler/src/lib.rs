@@ -129,19 +129,10 @@ fn tick_thread(thread_info: &ThreadInfo) -> Option<mlua::Result<mlua::MultiValue
             .0
             .resume::<mlua::MultiValue>(thread_info.1.clone());
 
-        match &result {
-            Ok(value) => {
-                if value.front().is_some_and(|value| {
-                    value
-                        .as_light_userdata()
-                        .is_some_and(|l| l == mlua::Lua::poll_pending())
-                }) {
-                    None
-                } else {
-                    Some(result)
-                }
-            }
-            Err(err) => Some(Err(err.to_owned())),
+        if let mlua::ThreadStatus::Resumable = thread_info.0.status() {
+            None
+        } else {
+            Some(result)
         }
     } else {
         None
