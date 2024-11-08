@@ -9,7 +9,7 @@ fn lua_spawn(
         })
         .into_inner();
 
-    crate::spawn_thread(&lua, thread, crate::SpawnProt::Spawn, args)
+    crate::spawn_thread(lua, thread, crate::SpawnProt::Spawn, args)
 }
 
 fn lua_defer(
@@ -23,7 +23,7 @@ fn lua_defer(
         })
         .into_inner();
 
-    crate::spawn_thread(&lua, thread, crate::SpawnProt::Defer, args)
+    crate::spawn_thread(lua, thread, crate::SpawnProt::Defer, args)
 }
 
 async fn lua_cancel(lua: mlua::Lua, thread: mlua::Thread) -> mlua::Result<()> {

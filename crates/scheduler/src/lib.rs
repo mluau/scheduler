@@ -131,7 +131,7 @@ fn tick_thread(thread_info: &ThreadInfo) -> Option<mlua::Result<mlua::MultiValue
 
         match &result {
             Ok(value) => {
-                if value.get(0).is_some_and(|value| {
+                if value.front().is_some_and(|value| {
                     value
                         .as_light_userdata()
                         .is_some_and(|l| l == mlua::Lua::poll_pending())

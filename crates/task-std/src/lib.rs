@@ -10,7 +10,7 @@ end, ...)
 ";
 
 pub fn inject_globals(lua: &mlua::Lua) -> mlua::Result<()> {
-    let task_functions = mlua_scheduler::functions::Functions::new(&lua)?;
+    let task_functions = mlua_scheduler::functions::Functions::new(lua)?;
 
     let wait = lua.create_async_function(|_, secs: Option<f64>| async move {
         let now = Instant::now();

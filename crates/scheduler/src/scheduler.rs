@@ -4,31 +4,22 @@ use mlua::ExternalResult;
 use smol::{channel, Executor};
 use std::{collections::HashMap, sync::Arc};
 
+pub(crate) type Pool<T> = (channel::Sender<T>, channel::Receiver<T>);
+pub(crate) type ThreadPool<T> = Pool<(usize, T)>;
+
 #[derive(Debug)]
 pub struct Scheduler {
-    pub(crate) spawn_pool: (
-        channel::Sender<(usize, ThreadInfo)>,
-        channel::Receiver<(usize, ThreadInfo)>,
-    ),
-    pub(crate) result_pool: (
-        channel::Sender<(usize, mlua::Result<mlua::MultiValue>)>,
-        channel::Receiver<(usize, mlua::Result<mlua::MultiValue>)>,
-    ),
-    pub(crate) yield_pool: (
-        channel::Sender<(usize, channel::Sender<mlua::MultiValue>)>,
-        channel::Receiver<(usize, channel::Sender<mlua::MultiValue>)>,
-    ),
-    pub(crate) cancel_pool: (channel::Sender<usize>, channel::Receiver<usize>),
-    pub(crate) result_sender_pool: (
-        channel::Sender<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
-        channel::Receiver<(usize, channel::Sender<mlua::Result<mlua::MultiValue>>)>,
-    ),
+    pub(crate) spawn_pool: ThreadPool<ThreadInfo>,
+    pub(crate) result_pool: ThreadPool<mlua::Result<mlua::MultiValue>>,
+    pub(crate) yield_pool: ThreadPool<channel::Sender<mlua::MultiValue>>,
+    pub(crate) cancel_pool: Pool<usize>,
+    pub(crate) result_sender_pool: ThreadPool<channel::Sender<mlua::Result<mlua::MultiValue>>>,
     pub executor: Executor<'static>,
 }
 
-impl Scheduler {
-    pub fn new() -> Self {
-        Scheduler {
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self {
             spawn_pool: channel::unbounded(),
             result_pool: channel::unbounded(),
             yield_pool: channel::unbounded(),
@@ -36,6 +27,12 @@ impl Scheduler {
             result_sender_pool: channel::unbounded(),
             executor: Executor::new(),
         }
+    }
+}
+
+impl Scheduler {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn setup(self, lua: &mlua::Lua) -> Arc<Self> {
@@ -76,7 +73,7 @@ impl Scheduler {
             }
 
             for (thread_id, thread_info) in &threads {
-                if let Some(result) = crate::tick_thread(&thread_info) {
+                if let Some(result) = crate::tick_thread(thread_info) {
                     // thread finished
                     finished_threads.insert(*thread_id, result);
                 };
@@ -99,7 +96,7 @@ impl Scheduler {
                     threads.shift_remove(thread_id);
                 }
 
-                if let Some(sender) = thread_result_senders.remove(&thread_id) {
+                if let Some(sender) = thread_result_senders.remove(thread_id) {
                     sender.send(thread_result.clone()).await.into_lua_err()?;
                 }
             }
