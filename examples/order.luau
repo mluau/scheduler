@@ -2,6 +2,8 @@
 --!nolint UnknownGlobal
 
 -- for testing
+assert(table.pack ~= nil, "table.pack is nil")
+
 local task = task or require("@lune/task")
 
 local threads: { [thread]: number } = {

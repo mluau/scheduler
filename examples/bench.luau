@@ -13,11 +13,13 @@ for current = 1, batches do
 	print(`Batch {current} / {batches}`)
 
 	for i = 1, per_batch do
+		--print("Spawning thread #" .. i)
 		task.spawn(function()
 			task.wait(0.1)
 
 			if i == per_batch then
-				assert(coroutine.status(thread) == "suspended")
+				print("Last thread in batch #" .. current)
+				assert(coroutine.status(thread) == "suspended", `Thread {i} has status {coroutine.status(thread)}`)
 				task.spawn(thread)
 			end
 		end)
