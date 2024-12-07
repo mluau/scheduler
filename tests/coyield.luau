@@ -5,9 +5,9 @@ function myCoroutine()
   end
   
   co = coroutine.create(myCoroutine)
-  task.wait(1)
+  task.wait(2)
+  print(coroutine.status(co))
   coroutine.resume(co)
-  task.wait(1)
+  task.wait(10)
   coroutine.resume(co)
-  
-  
+  print("End of program")

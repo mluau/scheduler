@@ -26,7 +26,9 @@ assert(flag, "Defer should run")
 
 local flag2: boolean = false
 task.defer(function()
+	print("Defer")
 	task.wait(0.05)
+	print("Defer2")
 	flag2 = true
 end)
 assert(not flag2, "Defer should work with yielding (1)")

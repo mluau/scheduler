@@ -779,6 +779,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "scheduler_ext"
+version = "1.0.0"
+dependencies = [
+ "flume",
+ "indexmap",
+ "log",
+ "mlua",
+ "mlua_scheduler",
+ "smol",
+ "tokio",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

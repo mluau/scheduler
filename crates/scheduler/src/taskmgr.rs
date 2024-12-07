@@ -1,17 +1,16 @@
-use scc::Queue;
-use std::{
-    rc::Rc,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use crate::XRc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 pub struct WaitingThread {
-    thread: ThreadInfo,
+    thread: XRc<ThreadInfo>,
     start: u64,
     resume_ticks: u64,
 }
 
 pub struct DeferredThread {
-    thread: ThreadInfo,
+    thread: XRc<ThreadInfo>,
 }
 
 #[derive(Debug)]
@@ -24,9 +23,9 @@ pub type OnError = fn(th: &ThreadInfo, mlua::Error) -> mlua::Result<()>;
 
 /// Task Manager
 pub struct TaskManager {
-    heartbeater: flume::Receiver<()>,
-    waiting_queue: std::sync::Mutex<std::collections::VecDeque<Rc<WaitingThread>>>,
-    deferred_queue: Queue<Rc<DeferredThread>>,
+    pending_threads: Mutex<Vec<XRc<ThreadInfo>>>,
+    waiting_queue: Mutex<VecDeque<XRc<WaitingThread>>>,
+    deferred_queue: Mutex<VecDeque<XRc<DeferredThread>>>,
     is_running: AtomicBool,
     ticks: AtomicU64,
 
@@ -37,11 +36,11 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
-    pub fn new(heartbeater: flume::Receiver<()>, on_error: OnError) -> Self {
+    pub fn new(on_error: OnError) -> Self {
         Self {
-            heartbeater,
-            waiting_queue: std::sync::Mutex::new(std::collections::VecDeque::default()),
-            deferred_queue: Queue::default(),
+            waiting_queue: Mutex::new(VecDeque::default()),
+            deferred_queue: Mutex::new(VecDeque::default()),
+            pending_threads: Mutex::new(Vec::default()),
             is_running: AtomicBool::new(false),
             ticks: AtomicU64::new(0),
             on_error,
@@ -60,10 +59,16 @@ impl TaskManager {
         args: mlua::MultiValue,
         resume_ticks: u64,
     ) {
+        /*println!(
+            "Adding waiting thread with curTicks: {}, resumeTicks: {}",
+            self.ticks.load(Ordering::Relaxed),
+            resume_ticks
+        );*/
         //println!("Trying to add thread to waiting queue");
+        let tinfo = XRc::new(ThreadInfo { thread, args });
         let mut self_ref = self.waiting_queue.lock().unwrap();
-        self_ref.push_front(Rc::new(WaitingThread {
-            thread: ThreadInfo { thread, args },
+        self_ref.push_front(XRc::new(WaitingThread {
+            thread: tinfo,
             start: self.ticks.load(Ordering::Relaxed),
             resume_ticks,
         }));
@@ -72,13 +77,13 @@ impl TaskManager {
 
     /// Adds a deferred thread to the task manager
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        self.deferred_queue.push(Rc::new(DeferredThread {
-            thread: ThreadInfo { thread, args },
-        }));
+        let tinfo = XRc::new(ThreadInfo { thread, args });
+        let mut self_ref = self.deferred_queue.lock().unwrap();
+        self_ref.push_front(XRc::new(DeferredThread { thread: tinfo }));
     }
 
     /// Runs the task manager
-    pub async fn run(&self) -> Result<(), mlua::Error> {
+    pub async fn run(&self, heartbeater: flume::Receiver<()>) -> Result<(), mlua::Error> {
         self.is_running.store(true, Ordering::Relaxed);
 
         //println!("Task Manager started");
@@ -88,10 +93,22 @@ impl TaskManager {
                 break;
             }
 
+            if self.is_empty() {
+                // Wait for next heartbeat
+                match heartbeater.recv_async().await {
+                    Ok(_) => {}
+                    Err(flume::RecvError::Disconnected) => {
+                        break;
+                    }
+                }
+
+                tokio::task::yield_now().await;
+            }
+
             self.process()?;
 
             // Wait for next heartbeat to continue processing
-            match self.heartbeater.recv_async().await {
+            match heartbeater.recv_async().await {
                 Ok(_) => {}
                 Err(flume::RecvError::Disconnected) => {
                     break;
@@ -100,8 +117,6 @@ impl TaskManager {
 
             // Increment tick count
             self.ticks.fetch_add(1, Ordering::Acquire);
-
-            //println!("Tick: {}", self.ticks.load(Ordering::Acquire));
         }
 
         Ok(())
@@ -117,21 +132,47 @@ impl TaskManager {
         // Process all threads in the queue
         //
         // NOTE/DEVIATION FROM ROBLOX BEHAVIOUR: All threads are processed in a single event loop per heartbeat
-        let mut readd_list = Vec::new();
-        while let Some(entry) = self.deferred_queue.pop() {
-            if self.process_deferred_thread(&entry)? {
-                readd_list.push((entry).clone());
+
+        let mut readd_pending = Vec::new();
+        {
+            loop {
+                // Pop element from self_ref
+                let mut self_ref = self.pending_threads.lock().unwrap();
+
+                let Some(entry) = self_ref.pop() else {
+                    break;
+                };
+
+                drop(self_ref);
+
+                if self.process_pending_thread(&entry)? {
+                    readd_pending.push(entry);
+                } else {
+                    self.add_deferred_thread(entry.thread.clone(), entry.args.clone());
+                }
             }
         }
 
-        // Readd threads that need to be readded
-        for entry in readd_list {
-            let rc: &Rc<DeferredThread> = &entry;
-            self.deferred_queue.push(rc.clone());
+        let mut readd_deferred_list = Vec::new();
+        {
+            loop {
+                // Pop element from self_ref
+                let mut self_ref = self.deferred_queue.lock().unwrap();
+
+                let Some(entry) = self_ref.pop_back() else {
+                    break;
+                };
+
+                drop(self_ref);
+
+                if self.process_deferred_thread(&entry)? {
+                    readd_deferred_list.push(entry);
+                }
+            }
         }
 
         //println!("Queue Length After Defer: {}", self.len());
-        let mut readd_list = Vec::new();
+        let mut readd_wait_list = Vec::new();
         {
             loop {
                 // Pop element from self_ref
@@ -144,13 +185,31 @@ impl TaskManager {
                 drop(self_ref);
 
                 if self.process_waiting_thread(&entry)? {
-                    readd_list.push(entry);
+                    readd_wait_list.push(entry);
                 }
             }
+        }
+
+        {
+            // Readd threads that need to be re-added
+            let mut self_ref = self.pending_threads.lock().unwrap();
+            for entry in readd_pending {
+                self_ref.push(entry);
+            }
+
+            drop(self_ref);
+
+            // Readd threads that need to be re-added
+            let mut self_ref = self.deferred_queue.lock().unwrap();
+            for entry in readd_deferred_list {
+                self_ref.push_back(entry);
+            }
+
+            drop(self_ref);
 
             // Readd threads that need to be re-added
             let mut self_ref = self.waiting_queue.lock().unwrap();
-            for entry in readd_list {
+            for entry in readd_wait_list {
                 self_ref.push_back(entry);
             }
 
@@ -159,41 +218,89 @@ impl TaskManager {
             //println!("Mutex unlocked");
         }
 
-        //println!("Queue Length: {}", self.len());
-
-        //println!("Tick: {}", self.ticks.load(Ordering::Acquire));
+        // Check all_threads, removing all finished threads and resuming all threads not in deferred_queue or waiting_queue
 
         Ok(())
     }
 
-    /// Processes a deferred thread
-    fn process_deferred_thread(&self, thread_info: &Rc<DeferredThread>) -> mlua::Result<bool> {
+    /// Processes a pending thread. Returns true if the thread is still running and should be readded to the list of pending tasks
+    ///
+    /// If it returns false, the thread should be deferred normally
+    fn process_pending_thread(&self, thread_info: &XRc<ThreadInfo>) -> mlua::Result<bool> {
+        /*
+            if coroutine.status(data.thread) ~= "dead" then
+               resume_with_error_check(data.thread, table.unpack(data.args))
+            end
+        */
+        match thread_info.thread.status() {
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
+            _ => {
+                //println!("Trying to resume deferred thread");
+                match thread_info
+                    .thread
+                    .resume::<mlua::Value>(thread_info.args.clone())
+                {
+                    Ok(res) => {
+                        if let mlua::Value::LightUserData(ud) = res {
+                            // mlua has a really dumb poll pending invariant to deal with
+                            if ud == mlua::Lua::poll_pending() {
+                                return Ok(true);
+                            }
+                        }
+
+                        Ok(false)
+                    }
+                    Err(err) => {
+                        (self.on_error)(thread_info, err)?;
+                        Ok(false)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
+    fn process_deferred_thread(&self, thread_info: &XRc<DeferredThread>) -> mlua::Result<bool> {
         /*
             if coroutine.status(data.thread) ~= "dead" then
                resume_with_error_check(data.thread, table.unpack(data.args))
             end
         */
         match thread_info.thread.thread.status() {
-            mlua::ThreadStatus::Error => {}
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
             _ => {
+                //println!("Trying to resume deferred thread");
                 match thread_info
                     .thread
                     .thread
-                    .resume::<mlua::MultiValue>(thread_info.thread.args.clone())
+                    .resume::<mlua::Value>(thread_info.thread.args.clone())
                 {
-                    Ok(_) => {}
+                    Ok(res) => {
+                        if let mlua::Value::LightUserData(ud) = res {
+                            // mlua has a really dumb poll pending invariant to deal with
+                            if ud == mlua::Lua::poll_pending() {
+                                let mut self_ref = self.pending_threads.lock().unwrap();
+                                self_ref.push(thread_info.thread.clone());
+                                drop(self_ref);
+                                return Ok(false);
+                            }
+                        }
+
+                        println!("Deferred thread resumed with {:?}", res);
+
+                        Ok(false)
+                    }
                     Err(err) => {
                         (self.on_error)(&thread_info.thread, err)?;
+                        Ok(false)
                     }
                 }
             }
         }
-
-        Ok(false)
     }
 
     /// Processes a waiting thread
-    fn process_waiting_thread(&self, thread_info: &Rc<WaitingThread>) -> mlua::Result<bool> {
+    fn process_waiting_thread(&self, thread_info: &XRc<WaitingThread>) -> mlua::Result<bool> {
         /*
         if coroutine.status(thread) == "dead" then
         elseif type(data) == "table" and last_tick >= data.resume then
@@ -208,31 +315,47 @@ impl TaskManager {
                  */
         let start = thread_info.start;
         let resume_ticks = thread_info.resume_ticks;
+        //println!("Thread Status: {:?}", thread_info.thread.thread.status());
         match thread_info.thread.thread.status() {
-            mlua::ThreadStatus::Error => {}
-            _ => {
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
+            mlua::ThreadStatus::Running => Ok(true),
+            mlua::ThreadStatus::Resumable => {
                 let ticks = self.ticks.load(Ordering::Relaxed);
-                //println!("Ticks: {}, Resume Ticks: {}", ticks, resume_ticks + start);
                 if ticks > (resume_ticks + start) {
+                    /*println!(
+                        "Resuming waiting thread, ticks: {}, resume_ticks: {}, start: {}",
+                        ticks, resume_ticks, start
+                    );*/
                     // resume_with_error_check(thread, table.unpack(data, 1, data.n))
                     match thread_info
                         .thread
                         .thread
-                        .resume::<mlua::MultiValue>(thread_info.thread.args.clone())
+                        .resume::<mlua::Value>(thread_info.thread.args.clone())
                     {
-                        Ok(_) => {}
+                        Ok(res) => {
+                            if let mlua::Value::LightUserData(ud) = res {
+                                // mlua has a really dumb poll pending invariant to deal with
+                                if ud == mlua::Lua::poll_pending() {
+                                    let mut self_ref = self.pending_threads.lock().unwrap();
+                                    self_ref.push(thread_info.thread.clone());
+                                    drop(self_ref);
+                                    return Ok(false);
+                                }
+                            }
+
+                            Ok(false)
+                        }
                         Err(err) => {
                             (self.on_error)(&thread_info.thread, err)?;
+                            Ok(false)
                         }
                     }
                 } else {
                     // Put thread back in queue
-                    return Ok(true);
+                    Ok(true)
                 }
             }
         }
-
-        Ok(false)
     }
 
     /// Stops the task manager
@@ -240,31 +363,40 @@ impl TaskManager {
         self.is_running.store(false, Ordering::Relaxed);
     }
 
+    /// Returns the waiting queue length
+    pub fn waiting_len(&self) -> usize {
+        self.waiting_queue.lock().unwrap().len()
+    }
+
+    /// Returns the deferred queue length
+    pub fn deferred_len(&self) -> usize {
+        self.deferred_queue.lock().unwrap().len()
+    }
+
+    /// Returns the pending threads length
+    pub fn pending_len(&self) -> usize {
+        self.pending_threads.lock().unwrap().len()
+    }
+
     /// Returns the number of items in the whole queue
     pub fn len(&self) -> usize {
-        let self_ref = self.waiting_queue.lock().unwrap();
-        self.deferred_queue.len() + self_ref.len()
+        self.waiting_len() + self.deferred_len() + self.pending_len()
     }
 
     /// Returns if the queue is empty
     pub fn is_empty(&self) -> bool {
-        let self_ref = self.waiting_queue.lock().unwrap();
-        self.deferred_queue.is_empty() && self_ref.is_empty()
+        self.len() == 0
     }
 }
 
-pub fn add_scheduler(
-    lua: &mlua::Lua,
-    hb: flume::Receiver<()>,
-    on_error: OnError,
-) -> mlua::Result<Rc<TaskManager>> {
-    let task_manager = Rc::new(TaskManager::new(hb, on_error));
-    lua.set_app_data(Rc::clone(&task_manager));
+pub fn add_scheduler(lua: &mlua::Lua, on_error: OnError) -> mlua::Result<XRc<TaskManager>> {
+    let task_manager = XRc::new(TaskManager::new(on_error));
+    lua.set_app_data(XRc::clone(&task_manager));
     Ok(task_manager)
 }
 
-pub fn get(lua: &mlua::Lua) -> Rc<TaskManager> {
-    lua.app_data_ref::<Rc<TaskManager>>()
+pub fn get(lua: &mlua::Lua) -> XRc<TaskManager> {
+    lua.app_data_ref::<XRc<TaskManager>>()
         .expect("Failed to get task manager")
         .clone()
 }
