@@ -1,6 +1,6 @@
 function myCoroutine()
     print("Hello, Codecademy!")
-    coroutine.yield()
+    coroutine.yield() -- Should yield
     print("How are you?")
   end
   

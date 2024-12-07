@@ -1,15 +1,13 @@
 --!nocheck
-print("LUA: Wait 1 second")
-task.wait(1)
-print("LUA: Doing _TEST_ASYNC_WORK(10)")
-_TEST_ASYNC_WORK(10)
-print("LUA: Done with _TEST_ASYNC_WORK(1)")
-print("LUA: Wait 1 second")
-task.wait(1)
-print("LUA: Doing _TEST_ASYNC_WORK(2)")
-_TEST_ASYNC_WORK(2)
-print("LUA: Done with _TEST_ASYNC_WORK(2)")
+-- Create a coroutine
+local co = coroutine.create(function()
+    print("LUA: Doing _TEST_ASYNC_WORK(0)")
+    _TEST_ASYNC_WORK(5)
+    print("LUA: Done with _TEST_ASYNC_WORK(0)")
+end)
+
+coroutine.resume(co)
 
 print("LUA: Wait 1 second")
 task.wait(1)
-print("All done")
+_TEST_ASYNC_WORK(2)

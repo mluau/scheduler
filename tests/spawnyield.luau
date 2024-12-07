@@ -3,3 +3,5 @@ task.spawn(function()
     print("ABC")
 end)
 
+
+print("CDE")

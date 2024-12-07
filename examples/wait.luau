@@ -8,6 +8,8 @@ local task = task or require("@lune/task")
 
 local currTime = os.clock()
 
+print("Waiting for 3 seconds")
+
 task.wait(3)
 
 print("Time waited:", os.clock() - currTime)

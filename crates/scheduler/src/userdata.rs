@@ -1,5 +1,27 @@
 use mlua::prelude::*;
 
+/// Patches the coroutine library to both work with the scheduler properly, but also to be more sane without deadlocking
+pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
+    let coroutine = lua.globals().get::<LuaTable>("coroutine")?;
+
+    // coroutine.resume needs to tell the scheduler its pending for resumption
+    coroutine.set(
+        "resume",
+        lua.create_async_function(|lua, (th, args): (LuaThread, LuaMultiValue)| async move {
+            let taskmgr = super::taskmgr::get(&lua);
+            match taskmgr.resume_thread(th, args.clone()).await {
+                Ok(res) => (true, res).into_lua_multi(&lua),
+                Err(err) => {
+                    // Error, return false and error message
+                    (false, err.to_string()).into_lua_multi(&lua)
+                }
+            }
+        })?,
+    )?;
+
+    Ok(())
+}
+
 pub fn table(lua: &Lua) -> LuaResult<LuaTable> {
     let table = lua
         .load(

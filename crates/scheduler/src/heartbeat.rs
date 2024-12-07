@@ -23,6 +23,7 @@ pub struct Heartbearter {
     tick_duration: std::time::Duration,
     interval: Interval,
     chan: HeartbeatChan,
+    shutdown_channel: HeartbeatChan,
 }
 
 impl Default for Heartbearter {
@@ -33,16 +34,26 @@ impl Default for Heartbearter {
 
 impl Heartbearter {
     pub fn new() -> Self {
+        Self::new_with_duration(Duration::from_millis(TICK_MILLIS))
+    }
+
+    pub fn new_with_duration(dur: Duration) -> Self {
         let chan = flume::unbounded();
+        let shutdown_channel = flume::unbounded();
         Self {
-            tick_duration: Duration::from_millis(TICK_MILLIS),
-            interval: interval(Duration::from_millis(TICK_MILLIS)),
+            tick_duration: dur,
+            interval: interval(dur),
             chan,
+            shutdown_channel,
         }
     }
 
     pub fn reciever(&self) -> flume::Receiver<()> {
         self.chan.1.clone()
+    }
+
+    pub fn shutdown_sender(&self) -> flume::Sender<()> {
+        self.shutdown_channel.0.clone()
     }
 
     pub fn tick_duration(&self) -> Duration {
@@ -56,11 +67,18 @@ impl Heartbearter {
 
     pub async fn run(&mut self) {
         loop {
-            self.interval.tick().await;
-            match self.chan.0.send_async(()).await {
-                Ok(_) => {}
-                Err(hb) => {
-                    log::warn!("Heartbeat: failed to send tick: {}", hb);
+            tokio::select! {
+                _ = self.interval.tick() => {
+                    match self.chan.0.send_async(()).await {
+                        Ok(_) => {}
+                        Err(hb) => {
+                            log::warn!("Heartbeat: failed to send tick: {}", hb);
+                        }
+                    }
+                }
+                _ = self.shutdown_channel.1.recv_async() => {
+                    log::info!("Heartbeat: shutting down");
+                    break;
                 }
             }
         }

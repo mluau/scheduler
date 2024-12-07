@@ -1,5 +1,4 @@
 use clap::Parser;
-use mlua_scheduler::taskmgr;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf};
 
@@ -22,12 +21,11 @@ async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
         .into_function()?;
 
     let th = lua.create_thread(f)?;
-
-    println!("Spawning thread: {:?}", th.to_pointer());
+    //println!("Spawning thread: {:?}", th.to_pointer());
 
     mlua_scheduler::spawn_thread(lua, th.clone(), mlua::MultiValue::new());
 
-    println!("Spawned thread: {:?}", th.to_pointer());
+    //println!("Spawned thread: {:?}", th.to_pointer());
     Ok(())
 }
 
@@ -50,25 +48,30 @@ fn main() {
 
         let mut hb = mlua_scheduler::heartbeat::Heartbearter::new();
         let hb_recv = hb.reciever();
+        let hb_shutdown = hb.shutdown_sender();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+        std::thread::Builder::new()
+            .name("heartbeat".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
 
-            let local = tokio::task::LocalSet::new();
+                let local = tokio::task::LocalSet::new();
 
-            local.block_on(&rt, async {
-                hb.run().await;
-            });
-        });
+                local.block_on(&rt, async {
+                    hb.run().await;
+                });
+            })
+            .expect("Failed to spawn heartbeat thread");
 
         let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, |_, e| {
             eprintln!("Error: {}", e);
             Ok(())
         })
         .unwrap();
+
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
             task_mgr_ref
@@ -85,8 +88,8 @@ fn main() {
             .set(
                 "_TEST_ASYNC_WORK",
                 lua.create_async_function(|lua, n: u64| async move {
-                    let task_mgr = taskmgr::get(&lua);
-                    println!("Async work: {}, taskmgr len: {}", n, task_mgr.len());
+                    //let task_mgr = taskmgr::get(&lua);
+                    println!("Async work: {}", n);
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
                     println!("Async work done: {}", n);
 
@@ -106,17 +109,23 @@ fn main() {
             )
             .expect("Failed to set task global");
 
-        smol::block_on(spawn_script(lua.clone(), cli.path)).expect("Failed to spawn script");
+        mlua_scheduler::userdata::patch_coroutine_lib(&lua).expect("Failed to patch coroutine lib");
 
-        loop {
-            //println!("Task manager len: {}", task_mgr.len());
-            if task_mgr.is_empty() {
-                break;
-            }
+        spawn_script(lua.clone(), cli.path)
+            .await
+            .expect("Failed to spawn script");
 
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        task_mgr.wait_till_done().await;
 
-        std::process::exit(0);
+        println!("Stopping task manager");
+
+        task_mgr.stop().await;
+
+        println!("Stopping heartbeater");
+
+        hb_shutdown
+            .send(())
+            .expect("Failed to send shutdown signal");
+        //std::process::exit(0);
     });
 }
