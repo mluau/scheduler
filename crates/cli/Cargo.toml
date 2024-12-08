@@ -9,3 +9,4 @@ smol = "2.0.2"
 mlua_scheduler = { version = "1.0.0", path = "../scheduler" }
 tokio = { version = "1", features = ["rt"] }
 clap = { version = "4.5.20", features = ["derive", "string"] }
+env_logger = "0.11"

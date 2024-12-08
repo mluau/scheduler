@@ -7,8 +7,8 @@ use std::sync::Mutex;
 
 pub struct WaitingThread {
     thread: XRc<ThreadInfo>,
-    start: u64,
-    resume_ticks: u64,
+    start: std::time::Instant,
+    duration: std::time::Duration,
 }
 
 pub struct DeferredThread {
@@ -21,7 +21,18 @@ pub struct ThreadInfo {
     args: mlua::MultiValue,
 }
 
-pub type OnError = fn(th: &ThreadInfo, mlua::Error) -> mlua::Result<()>;
+pub trait SchedulerFeedback {
+    /// Function that is called when any response, Ok or Error occurs
+    ///
+    /// Returning an error here will drop the task, *not* the task manager
+    fn on_response(
+        &self,
+        label: &str,
+        tm: &TaskManager,
+        th: &ThreadInfo,
+        result: Result<mlua::MultiValue, mlua::Error>,
+    ) -> mlua::Result<()>;
+}
 
 /// Task Manager
 pub struct TaskManager {
@@ -31,16 +42,11 @@ pub struct TaskManager {
     is_running: AtomicBool,
     shutdown_requested: AtomicBool,
     processing: AtomicBool,
-    ticks: AtomicU64,
-
-    /// Function that is called when an error occurs
-    ///
-    /// If this function returns an error, the task manager will stop and error with the error
-    on_error: OnError,
+    feedback: XRc<dyn SchedulerFeedback>,
 }
 
 impl TaskManager {
-    pub fn new(on_error: OnError) -> Self {
+    pub fn new(feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
             pending_threads_count: XRc::new(AtomicU64::new(0)),
             waiting_queue: Mutex::new(VecDeque::default()),
@@ -48,8 +54,7 @@ impl TaskManager {
             is_running: AtomicBool::new(false),
             shutdown_requested: AtomicBool::new(false),
             processing: AtomicBool::new(false),
-            ticks: AtomicU64::new(0),
-            on_error,
+            feedback,
         }
     }
 
@@ -117,29 +122,30 @@ impl TaskManager {
         &self,
         thread: mlua::Thread,
         args: mlua::MultiValue,
-        resume_ticks: u64,
+        duration: std::time::Duration,
     ) {
         log::debug!("Trying to add thread to waiting queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
         let mut self_ref = self.waiting_queue.lock().unwrap();
         self_ref.push_front(XRc::new(WaitingThread {
             thread: tinfo,
-            start: self.ticks.load(Ordering::Relaxed),
-            resume_ticks,
+            start: std::time::Instant::now(),
+            duration,
         }));
         log::debug!("Added thread to waiting queue");
     }
 
     /// Adds a deferred thread to the task manager
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        log::debug!("Adding deferred thread");
+        log::debug!("Adding deferred thread to queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
         let mut self_ref = self.deferred_queue.lock().unwrap();
         self_ref.push_front(XRc::new(DeferredThread { thread: tinfo }));
+        log::debug!("Added deferred thread to queue");
     }
 
     /// Runs the task manager
-    pub async fn run(&self, heartbeater: flume::Receiver<()>) -> Result<(), mlua::Error> {
+    pub async fn run(&self) -> Result<(), mlua::Error> {
         self.is_running.store(true, Ordering::Relaxed);
 
         //log::debug!("Task Manager started");
@@ -159,16 +165,7 @@ impl TaskManager {
             self.process().await?;
             self.processing.store(false, Ordering::Relaxed);
 
-            // Wait for next heartbeat to continue processing
-            match heartbeater.recv_async().await {
-                Ok(_) => {}
-                Err(flume::RecvError::Disconnected) => {
-                    break;
-                }
-            }
-
-            // Increment tick count
-            self.ticks.fetch_add(1, Ordering::Acquire);
+            tokio::task::yield_now().await;
         }
 
         Ok(())
@@ -182,8 +179,6 @@ impl TaskManager {
         );*/
 
         // Process all threads in the queue
-        //
-        // NOTE/DEVIATION FROM ROBLOX BEHAVIOUR: All threads are processed in a single event loop per heartbeat
 
         //log::debug!("Queue Length After Defer: {}", self.len());
         let mut readd_wait_list = Vec::new();
@@ -259,25 +254,21 @@ impl TaskManager {
         */
         match thread_info.thread.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
+            mlua::ThreadStatus::Running => Ok(true),
             _ => {
                 //log::debug!("Trying to resume deferred thread");
-                match self
+                let result = self
                     .resume_thread(
                         "DeferredThread",
                         thread_info.thread.thread.clone(),
                         thread_info.thread.args.clone(),
                     )
-                    .await
-                {
-                    Ok(_) => {
-                        log::debug!("Deferred thread finished");
-                        Ok(false)
-                    }
-                    Err(err) => {
-                        (self.on_error)(&thread_info.thread, err)?;
-                        Ok(false)
-                    }
-                }
+                    .await;
+
+                self.feedback
+                    .on_response("DeferredThread", self, &thread_info.thread, result)?;
+
+                Ok(false)
             }
         }
     }
@@ -297,36 +288,36 @@ impl TaskManager {
         end
                  */
         let start = thread_info.start;
-        let resume_ticks = thread_info.resume_ticks;
+        let duration = thread_info.duration;
+        let current_time = std::time::Instant::now();
 
         match thread_info.thread.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
             mlua::ThreadStatus::Running => Ok(true),
             mlua::ThreadStatus::Resumable => {
-                let ticks = self.ticks.load(Ordering::Relaxed);
-                if ticks > (resume_ticks + start) {
-                    /*log::debug!(
-                        "Resuming waiting thread, ticks: {}, resume_ticks: {}, start: {}",
-                        ticks, resume_ticks, start
-                    );*/
+                if current_time - start >= duration {
+                    log::debug!(
+                        "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
+                        start,
+                        duration,
+                        current_time
+                    );
                     // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                    match self
+                    let result = self
                         .resume_thread(
                             "WaitingThread",
                             thread_info.thread.thread.clone(),
                             thread_info.thread.args.clone(),
                         )
-                        .await
-                    {
-                        Ok(_) => {
-                            log::debug!("Waiting thread finished");
-                            Ok(false)
-                        }
-                        Err(err) => {
-                            (self.on_error)(&thread_info.thread, err)?;
-                            Ok(false)
-                        }
-                    }
+                        .await;
+
+                    self.feedback.on_response(
+                        "WaitingThread",
+                        self,
+                        &thread_info.thread,
+                        result,
+                    )?;
+                    Ok(false)
                 } else {
                     // Put thread back in queue
                     Ok(true)
@@ -379,8 +370,11 @@ impl TaskManager {
     }
 }
 
-pub fn add_scheduler(lua: &mlua::Lua, on_error: OnError) -> mlua::Result<XRc<TaskManager>> {
-    let task_manager = XRc::new(TaskManager::new(on_error));
+pub fn add_scheduler(
+    lua: &mlua::Lua,
+    feedback: XRc<dyn SchedulerFeedback>,
+) -> mlua::Result<XRc<TaskManager>> {
+    let task_manager = XRc::new(TaskManager::new(feedback));
     lua.set_app_data(XRc::clone(&task_manager));
     Ok(task_manager)
 }

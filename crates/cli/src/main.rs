@@ -1,4 +1,5 @@
 use clap::Parser;
+use mlua_scheduler::XRc;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf};
 
@@ -30,6 +31,8 @@ async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
 }
 
 fn main() {
+    env_logger::init();
+
     let cli = Cli::parse();
 
     println!("Running script: {:?}", cli.path);
@@ -46,36 +49,31 @@ fn main() {
         let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
             .expect("Failed to create Lua");
 
-        let mut hb = mlua_scheduler::heartbeat::Heartbearter::new();
-        let hb_recv = hb.reciever();
-        let hb_shutdown = hb.shutdown_sender();
+        pub struct TaskMgrFeedback {}
 
-        std::thread::Builder::new()
-            .name("heartbeat".to_string())
-            .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
+        impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
+            fn on_response(
+                &self,
+                label: &str,
+                _tm: &mlua_scheduler::taskmgr::TaskManager,
+                _th: &mlua_scheduler::taskmgr::ThreadInfo,
+                result: Result<mlua::MultiValue, mlua::Error>,
+            ) -> mlua::Result<()> {
+                if let Err(e) = result {
+                    eprintln!("Error [{}]: {}", label, e);
+                }
 
-                let local = tokio::task::LocalSet::new();
+                Ok(())
+            }
+        }
 
-                local.block_on(&rt, async {
-                    hb.run().await;
-                });
-            })
-            .expect("Failed to spawn heartbeat thread");
-
-        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, |_, e| {
-            eprintln!("Error: {}", e);
-            Ok(())
-        })
-        .unwrap();
+        let task_mgr =
+            mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {})).unwrap();
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
             task_mgr_ref
-                .run(hb_recv)
+                .run()
                 .await
                 .expect("Failed to run task manager");
         });
@@ -120,12 +118,6 @@ fn main() {
         println!("Stopping task manager");
 
         task_mgr.stop().await;
-
-        println!("Stopping heartbeater");
-
-        hb_shutdown
-            .send(())
-            .expect("Failed to send shutdown signal");
         //std::process::exit(0);
     });
 }

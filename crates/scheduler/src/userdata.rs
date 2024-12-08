@@ -80,7 +80,7 @@ return table
             scheduler.add_waiting_thread(
                 th,
                 LuaMultiValue::new(),
-                super::heartbeat::secs_to_ticks(resume),
+                std::time::Duration::from_secs_f64(resume),
             );
             Ok(())
         })?,
@@ -99,7 +99,7 @@ return table
                 scheduler.add_waiting_thread(
                     th.clone(),
                     args,
-                    super::heartbeat::secs_to_ticks(resume),
+                    std::time::Duration::from_secs_f64(resume),
                 );
                 Ok(th)
             },
