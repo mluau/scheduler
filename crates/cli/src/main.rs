@@ -67,8 +67,7 @@ fn main() {
             }
         }
 
-        let task_mgr =
-            mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {})).unwrap();
+        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {}));
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {

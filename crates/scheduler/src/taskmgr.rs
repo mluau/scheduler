@@ -4,17 +4,16 @@ use crate::XRc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct WaitingThread {
-    thread: XRc<ThreadInfo>,
+    thread: ThreadInfo,
     start: std::time::Instant,
     duration: std::time::Duration,
 }
 
 pub struct DeferredThread {
-    thread: XRc<ThreadInfo>,
+    thread: ThreadInfo,
 }
 
 #[derive(Debug)]
@@ -39,8 +38,8 @@ pub trait SchedulerFeedback {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pending_threads_count: XRc<AtomicU64>,
-    waiting_queue: RefCell<VecDeque<XRc<WaitingThread>>>,
-    deferred_queue: RefCell<VecDeque<XRc<DeferredThread>>>,
+    waiting_queue: RefCell<VecDeque<WaitingThread>>,
+    deferred_queue: RefCell<VecDeque<DeferredThread>>,
     is_running: AtomicBool,
     feedback: XRc<dyn SchedulerFeedback>,
 }
@@ -106,22 +105,22 @@ impl TaskManager {
         duration: std::time::Duration,
     ) {
         log::debug!("Trying to add thread to waiting queue");
-        let tinfo = XRc::new(ThreadInfo { thread, args });
+        let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
-        self_ref.push_front(XRc::new(WaitingThread {
+        self_ref.push_front(WaitingThread {
             thread: tinfo,
             start: std::time::Instant::now(),
             duration,
-        }));
+        });
         log::debug!("Added thread to waiting queue");
     }
 
     /// Adds a deferred thread to the task manager
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
-        let tinfo = XRc::new(ThreadInfo { thread, args });
+        let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(XRc::new(DeferredThread { thread: tinfo }));
+        self_ref.push_front(DeferredThread { thread: tinfo });
         log::debug!("Added deferred thread to queue");
     }
 
@@ -217,10 +216,7 @@ impl TaskManager {
     }
 
     /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
-    async fn process_deferred_thread(
-        &self,
-        thread_info: &XRc<DeferredThread>,
-    ) -> mlua::Result<bool> {
+    async fn process_deferred_thread(&self, thread_info: &DeferredThread) -> mlua::Result<bool> {
         /*
             if coroutine.status(data.thread) ~= "dead" then
                resume_with_error_check(data.thread, table.unpack(data.args))
@@ -251,7 +247,7 @@ impl TaskManager {
     }
 
     /// Processes a waiting thread
-    async fn process_waiting_thread(&self, thread_info: &XRc<WaitingThread>) -> mlua::Result<bool> {
+    async fn process_waiting_thread(&self, thread_info: &WaitingThread) -> mlua::Result<bool> {
         /*
         if coroutine.status(thread) == "dead" then
         elseif type(data) == "table" and last_tick >= data.resume then
@@ -343,17 +339,14 @@ impl TaskManager {
     }
 }
 
-pub fn add_scheduler(
-    lua: &mlua::Lua,
-    feedback: XRc<dyn SchedulerFeedback>,
-) -> mlua::Result<XRc<TaskManager>> {
-    let task_manager = XRc::new(TaskManager::new(feedback));
-    lua.set_app_data(XRc::clone(&task_manager));
-    Ok(task_manager)
+pub fn add_scheduler(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> TaskManager {
+    let task_manager = TaskManager::new(feedback);
+    lua.set_app_data(task_manager.clone());
+    task_manager
 }
 
-pub fn get(lua: &mlua::Lua) -> XRc<TaskManager> {
-    lua.app_data_ref::<XRc<TaskManager>>()
+pub fn get(lua: &mlua::Lua) -> TaskManager {
+    lua.app_data_ref::<TaskManager>()
         .expect("Failed to get task manager")
         .clone()
 }
