@@ -29,7 +29,7 @@ pub trait SchedulerFeedback {
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: Result<mlua::MultiValue, mlua::Error>,
+        result: &Result<mlua::MultiValue, mlua::Error>,
     );
 }
 
@@ -41,23 +41,23 @@ pub trait SchedulerFeedback: Send + Sync {
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: Result<mlua::MultiValue, mlua::Error>,
+        result: &Result<mlua::MultiValue, mlua::Error>,
     );
 }
 
 /// Inner task manager state
 pub struct TaskManagerInner {
-    pending_threads_count: XRc<AtomicU64>,
-    waiting_queue: XRefCell<VecDeque<WaitingThread>>,
-    deferred_queue: XRefCell<VecDeque<DeferredThread>>,
-    is_running: AtomicBool,
-    feedback: XRc<dyn SchedulerFeedback>,
+    pub pending_threads_count: XRc<AtomicU64>,
+    pub waiting_queue: XRefCell<VecDeque<WaitingThread>>,
+    pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
+    pub is_running: AtomicBool,
+    pub feedback: XRc<dyn SchedulerFeedback>,
 }
 
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
-    inner: XRc<TaskManagerInner>,
+    pub inner: XRc<TaskManagerInner>,
 }
 
 impl TaskManager {
@@ -92,7 +92,7 @@ impl TaskManager {
             .pending_threads_count
             .fetch_add(1, Ordering::Relaxed);
 
-        let mut async_thread = thread.clone().into_async::<mlua::MultiValue>(args);
+        let mut async_thread = thread.into_async::<mlua::MultiValue>(args);
 
         let Some(next) = async_thread.next().await else {
             return Ok(mlua::MultiValue::new());
@@ -179,7 +179,7 @@ impl TaskManager {
                     entry
                 };
 
-                if self.process_waiting_thread(&entry).await? {
+                if let Some(entry) = self.process_waiting_thread(entry).await {
                     readd_wait_list.push(entry);
                 }
             }
@@ -198,7 +198,7 @@ impl TaskManager {
                     entry
                 };
 
-                self.process_deferred_thread(&entry).await?;
+                self.process_deferred_thread(entry).await;
             }
         }
 
@@ -218,21 +218,21 @@ impl TaskManager {
     }
 
     /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
-    async fn process_deferred_thread(&self, thread_info: &DeferredThread) -> mlua::Result<()> {
+    async fn process_deferred_thread(&self, thread_info: DeferredThread) {
         /*
             if coroutine.status(data.thread) ~= "dead" then
                resume_with_error_check(data.thread, table.unpack(data.args))
             end
         */
         match thread_info.thread.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(()),
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
             _ => {
                 //log::debug!("Trying to resume deferred thread");
                 let result = self
                     .resume_thread(
                         "DeferredThread",
                         thread_info.thread.thread.clone(),
-                        thread_info.thread.args.clone(),
+                        thread_info.thread.args,
                     )
                     .await;
 
@@ -240,16 +240,14 @@ impl TaskManager {
                     "DeferredThread",
                     self,
                     &thread_info.thread.thread,
-                    result,
+                    &result,
                 );
-
-                Ok(())
             }
         }
     }
 
     /// Processes a waiting thread
-    async fn process_waiting_thread(&self, thread_info: &WaitingThread) -> mlua::Result<bool> {
+    async fn process_waiting_thread(&self, thread_info: WaitingThread) -> Option<WaitingThread> {
         /*
         if coroutine.status(thread) == "dead" then
         elseif type(data) == "table" and last_tick >= data.resume then
@@ -263,7 +261,7 @@ impl TaskManager {
         end
                  */
         match thread_info.thread.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => None,
             _ => {
                 let start = thread_info.start;
                 let duration = thread_info.duration;
@@ -281,7 +279,7 @@ impl TaskManager {
                         .resume_thread(
                             "WaitingThread",
                             thread_info.thread.thread.clone(),
-                            thread_info.thread.args.clone(),
+                            thread_info.thread.args,
                         )
                         .await;
 
@@ -289,13 +287,13 @@ impl TaskManager {
                         "WaitingThread",
                         self,
                         &thread_info.thread.thread,
-                        result,
+                        &result,
                     );
 
-                    Ok(false)
+                    None
                 } else {
                     // Put thread back in queue
-                    Ok(true)
+                    Some(thread_info)
                 }
             }
         }
