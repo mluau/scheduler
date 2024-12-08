@@ -77,17 +77,20 @@ impl TaskManager {
         args: mlua::MultiValue,
     ) -> mlua::Result<mlua::MultiValue> {
         log::debug!("StartResumeThread: {}", label);
-        let pending_count = self.inner.pending_threads_count.clone();
 
-        pending_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .pending_threads_count
+            .fetch_add(1, Ordering::Relaxed);
 
-        let mut async_thread = thread.clone().into_async::<mlua::MultiValue>(args.clone());
+        let mut async_thread = thread.clone().into_async::<mlua::MultiValue>(args);
 
         let Some(next) = async_thread.next().await else {
             return Ok(mlua::MultiValue::new());
         };
 
-        pending_count.fetch_sub(1, Ordering::Relaxed);
+        self.inner
+            .pending_threads_count
+            .fetch_sub(1, Ordering::Relaxed);
 
         tokio::task::yield_now().await;
         log::debug!("EndResumeThread {}", label);
