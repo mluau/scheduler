@@ -36,7 +36,7 @@ local function defer<T...>(task: Task<T...>, ...: T...): thread
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    return table.__addWaitingWithArgs(task, time, nil, ...)
+    return table.__addWaitingWithArgs(task, time, ...)
 end
 
 local function desynchronize(...)
@@ -131,7 +131,18 @@ return table
                     LuaEither::Right(t) => t,
                 };
 
-                t.resume::<()>(args)?;
+                loop {
+                    let result = t.resume::<mlua::Value>(args.clone());
+
+                    if let Ok(mlua::Value::LightUserData(ud)) = result {
+                        // mlua has a really dumb poll pending invariant to deal with
+                        if ud == mlua::Lua::poll_pending() {
+                            continue;
+                        }
+                    }
+
+                    break;
+                }
 
                 Ok(t)
             },

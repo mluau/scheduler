@@ -17,8 +17,8 @@ pub struct DeferredThread {
 
 #[derive(Debug)]
 pub struct ThreadInfo {
-    thread: mlua::Thread,
-    args: mlua::MultiValue,
+    pub thread: mlua::Thread,
+    pub args: mlua::MultiValue,
 }
 
 pub trait SchedulerFeedback {
@@ -29,7 +29,7 @@ pub trait SchedulerFeedback {
         &self,
         label: &str,
         tm: &TaskManager,
-        th: &ThreadInfo,
+        th: &mlua::Thread,
         result: Result<mlua::MultiValue, mlua::Error>,
     ) -> mlua::Result<()>;
 }
@@ -42,7 +42,7 @@ pub struct TaskManager {
     is_running: AtomicBool,
     shutdown_requested: AtomicBool,
     processing: AtomicBool,
-    feedback: XRc<dyn SchedulerFeedback>,
+    pub feedback: XRc<dyn SchedulerFeedback>,
 }
 
 impl TaskManager {
@@ -92,10 +92,11 @@ impl TaskManager {
     /// Resumes a thread to full
     pub async fn resume_thread_full(
         &self,
+        label: &str,
         thread: mlua::Thread,
         args: mlua::MultiValue,
     ) -> mlua::Result<mlua::MultiValue> {
-        log::debug!("StartResumeThreadFull");
+        log::debug!("StartResumeThreadFull: {}", label);
         let pending_count = self.pending_threads_count.clone();
 
         pending_count.fetch_add(1, Ordering::Relaxed);
@@ -113,7 +114,7 @@ impl TaskManager {
         pending_count.fetch_sub(1, Ordering::Relaxed);
 
         tokio::task::yield_now().await;
-        log::debug!("EndResumeThreadFull");
+        log::debug!("EndResumeThreadFull: {}", label);
         prev
     }
 
@@ -265,8 +266,12 @@ impl TaskManager {
                     )
                     .await;
 
-                self.feedback
-                    .on_response("DeferredThread", self, &thread_info.thread, result)?;
+                self.feedback.on_response(
+                    "DeferredThread",
+                    self,
+                    &thread_info.thread.thread,
+                    result,
+                )?;
 
                 Ok(false)
             }
@@ -314,7 +319,7 @@ impl TaskManager {
                     self.feedback.on_response(
                         "WaitingThread",
                         self,
-                        &thread_info.thread,
+                        &thread_info.thread.thread,
                         result,
                     )?;
                     Ok(false)

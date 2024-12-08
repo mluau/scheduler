@@ -47,7 +47,7 @@ task.spawn(function()
 		flag3 = 2
 	end
 end)
-task.wait()
+task.wait(0.01) -- Give time for processing, this test is racy
 assert(flag3 == 3, "Defer should run after spawned threads")
 
 -- Delay should be able to be nested

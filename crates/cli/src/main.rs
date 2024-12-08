@@ -56,7 +56,7 @@ fn main() {
                 &self,
                 label: &str,
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
-                _th: &mlua_scheduler::taskmgr::ThreadInfo,
+                _th: &mlua::Thread,
                 result: Result<mlua::MultiValue, mlua::Error>,
             ) -> mlua::Result<()> {
                 if let Err(e) = result {
