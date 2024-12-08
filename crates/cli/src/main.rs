@@ -65,12 +65,10 @@ fn main() {
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
                 _th: &mlua::Thread,
                 result: Result<mlua::MultiValue, mlua::Error>,
-            ) -> mlua::Result<()> {
+            ) {
                 if let Err(e) = result {
                     eprintln!("Error [{}]: {}", label, e);
                 }
-
-                Ok(())
             }
         }
 

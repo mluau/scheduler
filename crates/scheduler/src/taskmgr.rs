@@ -1,7 +1,6 @@
 use futures_util::StreamExt;
 
-use crate::XRc;
-use std::cell::RefCell;
+use crate::{XRc, XRefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -22,24 +21,35 @@ pub struct ThreadInfo {
     pub args: mlua::MultiValue,
 }
 
+#[cfg(not(feature = "send"))]
 pub trait SchedulerFeedback {
     /// Function that is called when any response, Ok or Error occurs
-    ///
-    /// Returning an error here will drop the task, *not* the task manager
     fn on_response(
         &self,
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
         result: Result<mlua::MultiValue, mlua::Error>,
-    ) -> mlua::Result<()>;
+    );
+}
+
+#[cfg(feature = "send")]
+pub trait SchedulerFeedback: Send + Sync {
+    /// Function that is called when any response, Ok or Error occurs
+    fn on_response(
+        &self,
+        label: &str,
+        tm: &TaskManager,
+        th: &mlua::Thread,
+        result: Result<mlua::MultiValue, mlua::Error>,
+    );
 }
 
 /// Inner task manager state
 pub struct TaskManagerInner {
     pending_threads_count: XRc<AtomicU64>,
-    waiting_queue: RefCell<VecDeque<WaitingThread>>,
-    deferred_queue: RefCell<VecDeque<DeferredThread>>,
+    waiting_queue: XRefCell<VecDeque<WaitingThread>>,
+    deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     is_running: AtomicBool,
     feedback: XRc<dyn SchedulerFeedback>,
 }
@@ -55,8 +65,8 @@ impl TaskManager {
         Self {
             inner: TaskManagerInner {
                 pending_threads_count: XRc::new(AtomicU64::new(0)),
-                waiting_queue: RefCell::new(VecDeque::default()),
-                deferred_queue: RefCell::new(VecDeque::default()),
+                waiting_queue: XRefCell::new(VecDeque::default()),
+                deferred_queue: XRefCell::new(VecDeque::default()),
                 is_running: AtomicBool::new(false),
                 feedback,
             }
@@ -144,6 +154,7 @@ impl TaskManager {
         Ok(())
     }
 
+    /// Processes the task manager
     pub async fn process(&self) -> Result<(), mlua::Error> {
         /*log::debug!(
             "Queue Length: {}, Running: {}",
@@ -158,13 +169,15 @@ impl TaskManager {
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.inner.waiting_queue.borrow_mut();
+                let entry = {
+                    let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
-                let Some(entry) = self_ref.pop_back() else {
-                    break;
+                    let Some(entry) = self_ref.pop_back() else {
+                        break;
+                    };
+
+                    entry
                 };
-
-                drop(self_ref);
 
                 if self.process_waiting_thread(&entry).await? {
                     readd_wait_list.push(entry);
@@ -172,32 +185,21 @@ impl TaskManager {
             }
         }
 
-        let mut readd_deferred_list = Vec::new();
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.inner.deferred_queue.borrow_mut();
+                let entry = {
+                    let mut self_ref = self.inner.deferred_queue.borrow_mut();
 
-                let Some(entry) = self_ref.pop_back() else {
-                    break;
+                    let Some(entry) = self_ref.pop_back() else {
+                        break;
+                    };
+
+                    entry
                 };
 
-                drop(self_ref);
-
-                if self.process_deferred_thread(&entry).await? {
-                    readd_deferred_list.push(entry);
-                }
+                self.process_deferred_thread(&entry).await?;
             }
-        }
-
-        if !readd_deferred_list.is_empty() {
-            // Readd threads that need to be re-added
-            let mut self_ref = self.inner.deferred_queue.borrow_mut();
-            for entry in readd_deferred_list {
-                self_ref.push_back(entry);
-            }
-
-            drop(self_ref);
         }
 
         if !readd_wait_list.is_empty() {
@@ -216,14 +218,14 @@ impl TaskManager {
     }
 
     /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
-    async fn process_deferred_thread(&self, thread_info: &DeferredThread) -> mlua::Result<bool> {
+    async fn process_deferred_thread(&self, thread_info: &DeferredThread) -> mlua::Result<()> {
         /*
             if coroutine.status(data.thread) ~= "dead" then
                resume_with_error_check(data.thread, table.unpack(data.args))
             end
         */
         match thread_info.thread.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(()),
             _ => {
                 //log::debug!("Trying to resume deferred thread");
                 let result = self
@@ -239,9 +241,9 @@ impl TaskManager {
                     self,
                     &thread_info.thread.thread,
                     result,
-                )?;
+                );
 
-                Ok(false)
+                Ok(())
             }
         }
     }
@@ -288,7 +290,8 @@ impl TaskManager {
                         self,
                         &thread_info.thread.thread,
                         result,
-                    )?;
+                    );
+
                     Ok(false)
                 } else {
                     // Put thread back in queue
