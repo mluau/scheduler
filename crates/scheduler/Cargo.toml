@@ -16,5 +16,3 @@ scc = "2"
 futures-util = "0.3.31"
 
 [features]
-default = []
-send = ["mlua/send"]
