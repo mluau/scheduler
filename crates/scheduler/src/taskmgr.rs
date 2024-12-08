@@ -1,6 +1,7 @@
 use futures_util::StreamExt;
 
 use crate::XRc;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -38,8 +39,8 @@ pub trait SchedulerFeedback {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pending_threads_count: XRc<AtomicU64>,
-    waiting_queue: Mutex<VecDeque<XRc<WaitingThread>>>,
-    deferred_queue: Mutex<VecDeque<XRc<DeferredThread>>>,
+    waiting_queue: RefCell<VecDeque<XRc<WaitingThread>>>,
+    deferred_queue: RefCell<VecDeque<XRc<DeferredThread>>>,
     is_running: AtomicBool,
     feedback: XRc<dyn SchedulerFeedback>,
 }
@@ -55,8 +56,8 @@ impl TaskManager {
         Self {
             inner: TaskManagerInner {
                 pending_threads_count: XRc::new(AtomicU64::new(0)),
-                waiting_queue: Mutex::new(VecDeque::default()),
-                deferred_queue: Mutex::new(VecDeque::default()),
+                waiting_queue: RefCell::new(VecDeque::default()),
+                deferred_queue: RefCell::new(VecDeque::default()),
                 is_running: AtomicBool::new(false),
                 feedback,
             }
@@ -92,7 +93,6 @@ impl TaskManager {
             .pending_threads_count
             .fetch_sub(1, Ordering::Relaxed);
 
-        tokio::task::yield_now().await;
         log::debug!("EndResumeThread {}", label);
 
         next
@@ -107,7 +107,7 @@ impl TaskManager {
     ) {
         log::debug!("Trying to add thread to waiting queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
-        let mut self_ref = self.inner.waiting_queue.lock().unwrap();
+        let mut self_ref = self.inner.waiting_queue.borrow_mut();
         self_ref.push_front(XRc::new(WaitingThread {
             thread: tinfo,
             start: std::time::Instant::now(),
@@ -120,7 +120,7 @@ impl TaskManager {
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
-        let mut self_ref = self.inner.deferred_queue.lock().unwrap();
+        let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(XRc::new(DeferredThread { thread: tinfo }));
         log::debug!("Added deferred thread to queue");
     }
@@ -159,7 +159,7 @@ impl TaskManager {
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.inner.waiting_queue.lock().unwrap();
+                let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
                 let Some(entry) = self_ref.pop_back() else {
                     break;
@@ -177,7 +177,7 @@ impl TaskManager {
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.inner.deferred_queue.lock().unwrap();
+                let mut self_ref = self.inner.deferred_queue.borrow_mut();
 
                 let Some(entry) = self_ref.pop_back() else {
                     break;
@@ -193,7 +193,7 @@ impl TaskManager {
 
         if !readd_deferred_list.is_empty() {
             // Readd threads that need to be re-added
-            let mut self_ref = self.inner.deferred_queue.lock().unwrap();
+            let mut self_ref = self.inner.deferred_queue.borrow_mut();
             for entry in readd_deferred_list {
                 self_ref.push_back(entry);
             }
@@ -203,7 +203,7 @@ impl TaskManager {
 
         if !readd_wait_list.is_empty() {
             // Readd threads that need to be re-added
-            let mut self_ref = self.inner.waiting_queue.lock().unwrap();
+            let mut self_ref = self.inner.waiting_queue.borrow_mut();
             for entry in readd_wait_list {
                 self_ref.push_back(entry);
             }
@@ -309,12 +309,12 @@ impl TaskManager {
 
     /// Returns the waiting queue length
     pub fn waiting_len(&self) -> usize {
-        self.inner.waiting_queue.lock().unwrap().len()
+        self.inner.waiting_queue.borrow().len()
     }
 
     /// Returns the deferred queue length
     pub fn deferred_len(&self) -> usize {
-        self.inner.deferred_queue.lock().unwrap().len()
+        self.inner.deferred_queue.borrow_mut().len()
     }
 
     /// Returns the pending count length
