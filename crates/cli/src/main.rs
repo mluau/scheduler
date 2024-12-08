@@ -1,7 +1,7 @@
 use clap::Parser;
 use mlua_scheduler::XRc;
 use smol::fs;
-use std::{env::consts::OS, path::PathBuf};
+use std::{env::consts::OS, path::PathBuf, time::Duration};
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")
@@ -73,7 +73,7 @@ fn main() {
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
             task_mgr_ref
-                .run()
+                .run(Duration::from_millis(1))
                 .await
                 .expect("Failed to run task manager");
         });
@@ -113,11 +113,11 @@ fn main() {
             .await
             .expect("Failed to spawn script");
 
-        task_mgr.wait_till_done().await;
+        task_mgr.wait_till_done(Duration::from_millis(100)).await;
 
         println!("Stopping task manager");
 
-        task_mgr.stop().await;
+        task_mgr.stop();
         //std::process::exit(0);
     });
 }

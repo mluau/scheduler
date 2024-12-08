@@ -4,6 +4,7 @@ use crate::XRc;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub struct WaitingThread {
     thread: XRc<ThreadInfo>,
@@ -34,33 +35,38 @@ pub trait SchedulerFeedback {
     ) -> mlua::Result<()>;
 }
 
-/// Task Manager
-pub struct TaskManager {
+/// Inner task manager state
+pub struct TaskManagerInner {
     pending_threads_count: XRc<AtomicU64>,
     waiting_queue: Mutex<VecDeque<XRc<WaitingThread>>>,
     deferred_queue: Mutex<VecDeque<XRc<DeferredThread>>>,
     is_running: AtomicBool,
-    shutdown_requested: AtomicBool,
-    processing: AtomicBool,
-    pub feedback: XRc<dyn SchedulerFeedback>,
+    feedback: XRc<dyn SchedulerFeedback>,
+}
+
+#[derive(Clone)]
+/// Task Manager
+pub struct TaskManager {
+    inner: XRc<TaskManagerInner>,
 }
 
 impl TaskManager {
     pub fn new(feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
-            pending_threads_count: XRc::new(AtomicU64::new(0)),
-            waiting_queue: Mutex::new(VecDeque::default()),
-            deferred_queue: Mutex::new(VecDeque::default()),
-            is_running: AtomicBool::new(false),
-            shutdown_requested: AtomicBool::new(false),
-            processing: AtomicBool::new(false),
-            feedback,
+            inner: TaskManagerInner {
+                pending_threads_count: XRc::new(AtomicU64::new(0)),
+                waiting_queue: Mutex::new(VecDeque::default()),
+                deferred_queue: Mutex::new(VecDeque::default()),
+                is_running: AtomicBool::new(false),
+                feedback,
+            }
+            .into(),
         }
     }
 
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
-        self.is_running.load(Ordering::Acquire)
+        self.inner.is_running.load(Ordering::Acquire)
     }
 
     /// Resumes a thread to next
@@ -71,7 +77,7 @@ impl TaskManager {
         args: mlua::MultiValue,
     ) -> mlua::Result<mlua::MultiValue> {
         log::debug!("StartResumeThread: {}", label);
-        let pending_count = self.pending_threads_count.clone();
+        let pending_count = self.inner.pending_threads_count.clone();
 
         pending_count.fetch_add(1, Ordering::Relaxed);
 
@@ -89,35 +95,6 @@ impl TaskManager {
         next
     }
 
-    /// Resumes a thread to full
-    pub async fn resume_thread_full(
-        &self,
-        label: &str,
-        thread: mlua::Thread,
-        args: mlua::MultiValue,
-    ) -> mlua::Result<mlua::MultiValue> {
-        log::debug!("StartResumeThreadFull: {}", label);
-        let pending_count = self.pending_threads_count.clone();
-
-        pending_count.fetch_add(1, Ordering::Relaxed);
-
-        let mut async_thread = thread.into_async::<mlua::MultiValue>(args);
-
-        let mut prev = Ok(mlua::MultiValue::new());
-        loop {
-            let Some(next) = async_thread.next().await else {
-                break;
-            };
-            prev = next;
-        }
-
-        pending_count.fetch_sub(1, Ordering::Relaxed);
-
-        tokio::task::yield_now().await;
-        log::debug!("EndResumeThreadFull: {}", label);
-        prev
-    }
-
     /// Adds a waiting thread to the task manager
     pub fn add_waiting_thread(
         &self,
@@ -127,7 +104,7 @@ impl TaskManager {
     ) {
         log::debug!("Trying to add thread to waiting queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
-        let mut self_ref = self.waiting_queue.lock().unwrap();
+        let mut self_ref = self.inner.waiting_queue.lock().unwrap();
         self_ref.push_front(XRc::new(WaitingThread {
             thread: tinfo,
             start: std::time::Instant::now(),
@@ -140,14 +117,14 @@ impl TaskManager {
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
         let tinfo = XRc::new(ThreadInfo { thread, args });
-        let mut self_ref = self.deferred_queue.lock().unwrap();
+        let mut self_ref = self.inner.deferred_queue.lock().unwrap();
         self_ref.push_front(XRc::new(DeferredThread { thread: tinfo }));
         log::debug!("Added deferred thread to queue");
     }
 
     /// Runs the task manager
-    pub async fn run(&self) -> Result<(), mlua::Error> {
-        self.is_running.store(true, Ordering::Relaxed);
+    pub async fn run(&self, sleep_interval: Duration) -> Result<(), mlua::Error> {
+        self.inner.is_running.store(true, Ordering::Relaxed);
 
         //log::debug!("Task Manager started");
 
@@ -156,17 +133,10 @@ impl TaskManager {
                 break;
             }
 
-            if self.shutdown_requested.load(Ordering::Relaxed) {
-                self.is_running.store(false, Ordering::Relaxed);
-                break;
-            }
-
             //log::debug!("Processing task manager");
-            self.processing.store(true, Ordering::Relaxed);
             self.process().await?;
-            self.processing.store(false, Ordering::Relaxed);
 
-            tokio::task::yield_now().await;
+            tokio::time::sleep(sleep_interval).await;
         }
 
         Ok(())
@@ -175,18 +145,18 @@ impl TaskManager {
     pub async fn process(&self) -> Result<(), mlua::Error> {
         /*log::debug!(
             "Queue Length: {}, Running: {}",
-            self.len(),
-            self.is_running()
+            self.inner.len(),
+            self.inner.is_running()
         );*/
 
         // Process all threads in the queue
 
-        //log::debug!("Queue Length After Defer: {}", self.len());
+        //log::debug!("Queue Length After Defer: {}", self.inner.len());
         let mut readd_wait_list = Vec::new();
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.waiting_queue.lock().unwrap();
+                let mut self_ref = self.inner.waiting_queue.lock().unwrap();
 
                 let Some(entry) = self_ref.pop_back() else {
                     break;
@@ -204,7 +174,7 @@ impl TaskManager {
         {
             loop {
                 // Pop element from self_ref
-                let mut self_ref = self.deferred_queue.lock().unwrap();
+                let mut self_ref = self.inner.deferred_queue.lock().unwrap();
 
                 let Some(entry) = self_ref.pop_back() else {
                     break;
@@ -218,24 +188,24 @@ impl TaskManager {
             }
         }
 
-        {
+        if !readd_deferred_list.is_empty() {
             // Readd threads that need to be re-added
-            let mut self_ref = self.deferred_queue.lock().unwrap();
+            let mut self_ref = self.inner.deferred_queue.lock().unwrap();
             for entry in readd_deferred_list {
                 self_ref.push_back(entry);
             }
 
             drop(self_ref);
+        }
 
+        if !readd_wait_list.is_empty() {
             // Readd threads that need to be re-added
-            let mut self_ref = self.waiting_queue.lock().unwrap();
+            let mut self_ref = self.inner.waiting_queue.lock().unwrap();
             for entry in readd_wait_list {
                 self_ref.push_back(entry);
             }
 
             drop(self_ref);
-
-            //log::debug!("Mutex unlocked");
         }
 
         // Check all_threads, removing all finished threads and resuming all threads not in deferred_queue or waiting_queue
@@ -255,7 +225,6 @@ impl TaskManager {
         */
         match thread_info.thread.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
-            mlua::ThreadStatus::Running => Ok(true),
             _ => {
                 //log::debug!("Trying to resume deferred thread");
                 let result = self
@@ -266,7 +235,7 @@ impl TaskManager {
                     )
                     .await;
 
-                self.feedback.on_response(
+                self.inner.feedback.on_response(
                     "DeferredThread",
                     self,
                     &thread_info.thread.thread,
@@ -292,14 +261,13 @@ impl TaskManager {
             waiting_threads[thread] = data
         end
                  */
-        let start = thread_info.start;
-        let duration = thread_info.duration;
-        let current_time = std::time::Instant::now();
-
         match thread_info.thread.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => Ok(false),
-            mlua::ThreadStatus::Running => Ok(true),
-            mlua::ThreadStatus::Resumable => {
+            _ => {
+                let start = thread_info.start;
+                let duration = thread_info.duration;
+                let current_time = std::time::Instant::now();
+
                 if current_time - start >= duration {
                     log::debug!(
                         "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
@@ -316,7 +284,7 @@ impl TaskManager {
                         )
                         .await;
 
-                    self.feedback.on_response(
+                    self.inner.feedback.on_response(
                         "WaitingThread",
                         self,
                         &thread_info.thread.thread,
@@ -332,27 +300,23 @@ impl TaskManager {
     }
 
     /// Stops the task manager
-    pub async fn stop(&self) {
-        self.shutdown_requested.store(true, Ordering::Relaxed);
-
-        while self.is_running() {
-            tokio::task::yield_now().await;
-        }
+    pub fn stop(&self) {
+        self.inner.is_running.store(false, Ordering::Relaxed);
     }
 
     /// Returns the waiting queue length
     pub fn waiting_len(&self) -> usize {
-        self.waiting_queue.lock().unwrap().len()
+        self.inner.waiting_queue.lock().unwrap().len()
     }
 
     /// Returns the deferred queue length
     pub fn deferred_len(&self) -> usize {
-        self.deferred_queue.lock().unwrap().len()
+        self.inner.deferred_queue.lock().unwrap().len()
     }
 
     /// Returns the pending count length
     pub fn pending_len(&self) -> usize {
-        self.pending_threads_count.load(Ordering::Relaxed) as usize
+        self.inner.pending_threads_count.load(Ordering::Relaxed) as usize
     }
 
     /// Returns the number of items in the whole queue
@@ -365,12 +329,13 @@ impl TaskManager {
         self.len() == 0
     }
 
-    pub async fn wait_till_done(&self) {
+    pub async fn wait_till_done(&self, sleep_interval: Duration) {
         while self.is_running() {
-            if self.is_empty() && !self.processing.load(Ordering::Relaxed) {
+            if self.is_empty() {
                 break;
             }
-            tokio::task::yield_now().await;
+
+            tokio::time::sleep(sleep_interval).await;
         }
     }
 }
