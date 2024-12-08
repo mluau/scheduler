@@ -1,3 +1,4 @@
+local task = task or require("@lune/task")
 task.spawn(function() 
     task.wait(2)
     print("ABC")
