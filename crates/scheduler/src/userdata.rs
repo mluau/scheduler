@@ -128,25 +128,20 @@ return table
 
     table.set(
         "spawn",
-        lua.create_function(
-            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+        lua.create_async_function(
+            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| async move {
                 let t = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
 
-                loop {
-                    let result = t.resume::<mlua::Value>(args.clone());
+                let taskmgr = super::taskmgr::get(&lua);
+                let result = taskmgr.resume_thread("ThreadSpawn", t.clone(), args).await;
 
-                    if let Ok(mlua::Value::LightUserData(ud)) = result {
-                        // mlua has a really dumb poll pending invariant to deal with
-                        if ud == mlua::Lua::poll_pending() {
-                            continue;
-                        }
-                    }
-
-                    break;
-                }
+                taskmgr
+                    .inner
+                    .feedback
+                    .on_response("TaskResume", &taskmgr, &t, &result);
 
                 Ok(t)
             },

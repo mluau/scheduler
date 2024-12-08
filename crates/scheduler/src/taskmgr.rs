@@ -1,6 +1,5 @@
-use futures_util::StreamExt;
-
 use crate::{XRc, XRefCell};
+use futures_util::StreamExt;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
