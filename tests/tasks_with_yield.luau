@@ -8,6 +8,6 @@ end)
 
 coroutine.resume(co)
 
-print("LUA: Wait 1 second")
-task.wait(1)
+print("LUA: Wait 5 second")
+task.wait(5)
 _TEST_ASYNC_WORK(2)

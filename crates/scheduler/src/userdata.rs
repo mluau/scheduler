@@ -9,7 +9,10 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
         "resume",
         lua.create_async_function(|lua, (th, args): (LuaThread, LuaMultiValue)| async move {
             let taskmgr = super::taskmgr::get(&lua);
-            match taskmgr.resume_thread(th, args.clone()).await {
+            match taskmgr
+                .resume_thread("CoroutineResume", th, args.clone())
+                .await
+            {
                 Ok(res) => (true, res).into_lua_multi(&lua),
                 Err(err) => {
                     // Error, return false and error message
