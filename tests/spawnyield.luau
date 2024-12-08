@@ -4,6 +4,7 @@ task.spawn(function()
     print("_TEST_ASYNC_WORK(2)")
     _TEST_ASYNC_WORK(2)
     print("DEF")
+    _TEST_ASYNC_WORK(2)
 end)
 
 
