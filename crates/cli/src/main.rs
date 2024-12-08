@@ -49,6 +49,13 @@ fn main() {
         let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
             .expect("Failed to create Lua");
 
+        #[cfg(feature = "ncg")]
+        lua.enable_jit(true);
+
+        let compiler = mlua::Compiler::new().set_optimization_level(2);
+
+        lua.set_compiler(compiler);
+
         pub struct TaskMgrFeedback {}
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
@@ -107,6 +114,8 @@ fn main() {
             .expect("Failed to set task global");
 
         mlua_scheduler::userdata::patch_coroutine_lib(&lua).expect("Failed to patch coroutine lib");
+
+        lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
 
         spawn_script(lua.clone(), cli.path)
             .await
