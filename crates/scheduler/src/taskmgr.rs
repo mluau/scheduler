@@ -275,12 +275,10 @@ impl TaskManager {
                         current_time
                     );
                     // resume_with_error_check(thread, table.unpack(data, 1, data.n))
+                    let mut args = thread_info.thread.args;
+                    args.push_back(mlua::Value::Number((current_time - start).as_secs_f64()));
                     let result = self
-                        .resume_thread(
-                            "WaitingThread",
-                            thread_info.thread.thread.clone(),
-                            thread_info.thread.args,
-                        )
+                        .resume_thread("WaitingThread", thread_info.thread.thread.clone(), args)
                         .await;
 
                     self.inner.feedback.on_response(

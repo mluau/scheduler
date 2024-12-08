@@ -4,7 +4,6 @@ use mlua::prelude::*;
 pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
     let coroutine = lua.globals().get::<LuaTable>("coroutine")?;
 
-    // coroutine.resume needs to tell the scheduler its pending for resumption
     coroutine.set(
         "resume",
         lua.create_async_function(|lua, (th, args): (LuaThread, LuaMultiValue)| async move {
@@ -58,8 +57,7 @@ local function wait(time: number?): number
         time = 0
     end
     table.__addWaiting(coroutine.running(), time)
-    coroutine.yield()
-    return os.clock() - time
+    return coroutine.yield()
 end
 
 local function cancel(thread: thread): ()
@@ -154,5 +152,6 @@ return table
             },
         )?,
     )?;
+
     Ok(table)
 }

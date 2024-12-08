@@ -1,4 +1,12 @@
 --!nocheck
+local task = task or require("@lune/task")
+
+--if _TEST_ASYNC_WORK == nil then
+	_TEST_ASYNC_WORK = function(n)
+		task.wait(n)
+	end
+--end
+
 task.spawn(function() 
 	print("LUA: Wait 3 second")
 	task.wait(3)

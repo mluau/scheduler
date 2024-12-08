@@ -1,0 +1,12 @@
+local task = task or require("@lune/task")
+local thread = task.spawn(function()
+    print("a")
+    print(task.wait(1))
+    print("d")
+    print(coroutine.yield())
+    print("f")
+end)
+
+print("b")
+coroutine.resume(thread, "c")
+print("e")
