@@ -1,3 +1,4 @@
+pub mod r#async;
 pub mod taskmgr;
 pub mod userdata;
 
