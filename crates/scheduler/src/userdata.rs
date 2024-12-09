@@ -165,7 +165,7 @@ pub trait AsyncCallback {
     async fn call(&mut self, lua: &Lua, args: LuaMultiValue) -> LuaResult<mlua::MultiValue>;
 }
 
-/// TODO
+/// Creates an async task that can then be pushed to the scheduler
 pub fn create_async_task<A, F, FR>(lua: &Lua, func: F) -> Box<dyn AsyncCallback>
 where
     A: FromLuaMulti + mlua::MaybeSend + 'static,
