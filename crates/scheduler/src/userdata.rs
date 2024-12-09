@@ -1,5 +1,10 @@
 use mlua::prelude::*;
 
+#[derive(Clone)]
+pub struct ErrorUserdata {}
+
+impl LuaUserData for ErrorUserdata {}
+
 /// Patches the coroutine library to both work with the scheduler properly, but also to be more sane without deadlocking
 pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
     let coroutine = lua.globals().get::<LuaTable>("coroutine")?;
@@ -26,6 +31,22 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
             }
         })?,
     )?;
+
+    // Patch yield to error when it sees a error metatable
+    lua.load(
+        r#"
+local ERROR_USERDATA = ...
+local yield = coroutine.yield
+coroutine.yield = function(...)
+    local result = table.pack(yield(...))
+    if rawequal(result[1], ERROR_USERDATA) then
+        error(result[2])
+    end
+    return unpack(result, 1, result.n)
+end
+"#,
+    )
+    .call::<()>(lua.app_data_ref::<mlua::Value>().unwrap().clone())?;
 
     Ok(())
 }

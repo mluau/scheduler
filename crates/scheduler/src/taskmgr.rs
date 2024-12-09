@@ -1,7 +1,11 @@
 use crate::{XRc, XRefCell};
 use futures_util::StreamExt;
+use mlua::{IntoLua, IntoLuaMulti};
 use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::Poll;
 use std::time::Duration;
 
 pub struct WaitingThread {
@@ -18,6 +22,11 @@ pub struct DeferredThread {
 pub struct ThreadInfo {
     pub thread: mlua::Thread,
     pub args: mlua::MultiValue,
+}
+
+pub struct AsyncThreadInfo {
+    pub thread: ThreadInfo,
+    pub callback: Pin<Box<dyn Future<Output = mlua::Result<mlua::MultiValue>>>>,
 }
 
 #[cfg(not(feature = "send"))]
@@ -46,7 +55,9 @@ pub trait SchedulerFeedback: Send + Sync {
 
 /// Inner task manager state
 pub struct TaskManagerInner {
+    pub lua: mlua::Lua,
     pub pending_threads_count: XRc<AtomicU64>,
+    pub async_queue: XRefCell<VecDeque<AsyncThreadInfo>>,
     pub waiting_queue: XRefCell<VecDeque<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     pub is_running: AtomicBool,
@@ -60,14 +71,16 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
-    pub fn new(feedback: XRc<dyn SchedulerFeedback>) -> Self {
+    pub fn new(lua: mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
             inner: TaskManagerInner {
                 pending_threads_count: XRc::new(AtomicU64::new(0)),
+                async_queue: XRefCell::new(VecDeque::default()),
                 waiting_queue: XRefCell::new(VecDeque::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
                 is_running: AtomicBool::new(false),
                 feedback,
+                lua,
             }
             .into(),
         }
@@ -83,7 +96,7 @@ impl TaskManager {
         &self,
         label: &str,
         thread: mlua::Thread,
-        args: mlua::MultiValue,
+        args: impl IntoLuaMulti + std::marker::Unpin,
     ) -> mlua::Result<mlua::MultiValue> {
         log::debug!("StartResumeThread: {}", label);
 
@@ -104,6 +117,32 @@ impl TaskManager {
         log::debug!("EndResumeThread {}", label);
 
         next
+    }
+
+    /// Adds an async thread to the task manager
+    pub fn add_async_thread(
+        &self,
+        thread: mlua::Thread,
+        args: mlua::MultiValue,
+        callback: crate::r#async::AsyncCallbackData,
+    ) {
+        let mut callback = callback.callback;
+
+        let lua = self.inner.lua.clone();
+        let args_ref = args.clone();
+
+        let fut = async move { callback.call(lua, args_ref).await };
+        log::debug!("Trying to add async thread to queue");
+        let tinfo = ThreadInfo {
+            thread,
+            args: args.clone(),
+        };
+        let mut self_ref = self.inner.async_queue.borrow_mut();
+        self_ref.push_front(AsyncThreadInfo {
+            thread: tinfo,
+            callback: Box::pin(fut),
+        });
+        log::debug!("Added async thread to queue");
     }
 
     /// Adds a waiting thread to the task manager
@@ -163,6 +202,26 @@ impl TaskManager {
 
         // Process all threads in the queue
 
+        let mut readd_async_list = Vec::new();
+        {
+            loop {
+                // Pop element from self_ref
+                let entry = {
+                    let mut self_ref = self.inner.async_queue.borrow_mut();
+
+                    let Some(entry) = self_ref.pop_back() else {
+                        break;
+                    };
+
+                    entry
+                };
+
+                if let Some(entry) = self.process_async_thread(entry).await? {
+                    readd_async_list.push(entry);
+                }
+            }
+        }
+
         //log::debug!("Queue Length After Defer: {}", self.inner.len());
         let mut readd_wait_list = Vec::new();
         {
@@ -198,6 +257,13 @@ impl TaskManager {
                 };
 
                 self.process_deferred_thread(entry).await;
+            }
+        }
+
+        {
+            let mut self_ref = self.inner.async_queue.borrow_mut();
+            for entry in readd_async_list {
+                self_ref.push_back(entry);
             }
         }
 
@@ -296,6 +362,69 @@ impl TaskManager {
         }
     }
 
+    async fn process_async_thread(
+        &self,
+        thread_info: AsyncThreadInfo,
+    ) -> Result<Option<AsyncThreadInfo>, mlua::Error> {
+        let mut thread_info = thread_info;
+
+        let fut = &mut thread_info.callback;
+        let result = futures_util::poll!(fut);
+
+        match result {
+            Poll::Pending => Ok(Some(thread_info)),
+            Poll::Ready(result) => {
+                self.inner.feedback.on_response(
+                    "AsyncThread",
+                    self,
+                    &thread_info.thread.thread,
+                    &result,
+                );
+
+                match result {
+                    Ok(result) => {
+                        let result = self
+                            .resume_thread("AsyncThread", thread_info.thread.thread.clone(), result)
+                            .await;
+
+                        self.inner.feedback.on_response(
+                            "AsyncThread.Resume",
+                            self,
+                            &thread_info.thread.thread,
+                            &result,
+                        );
+
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        let mut result = mlua::MultiValue::new();
+                        result.push_back(
+                            self.inner
+                                .lua
+                                .app_data_ref::<mlua::Value>()
+                                .unwrap()
+                                .clone(),
+                        );
+                        result.push_back(e.to_string().into_lua(&self.inner.lua)?);
+
+                        let result = self
+                            .resume_thread("AsyncThread", thread_info.thread.thread.clone(), result)
+                            .await;
+
+                        self.inner.feedback.on_response(
+                            "AsyncThread.Resume",
+                            self,
+                            &thread_info.thread.thread,
+                            &result,
+                        );
+
+                        Ok(None)
+                    }
+                }
+            }
+        }
+    }
+
     /// Stops the task manager
     pub fn stop(&self) {
         self.inner.is_running.store(false, Ordering::Relaxed);
@@ -316,9 +445,14 @@ impl TaskManager {
         self.inner.pending_threads_count.load(Ordering::Relaxed) as usize
     }
 
+    /// Returns the async queue length
+    pub fn async_len(&self) -> usize {
+        self.inner.async_queue.borrow().len()
+    }
+
     /// Returns the number of items in the whole queue
     pub fn len(&self) -> usize {
-        self.waiting_len() + self.deferred_len() + self.pending_len()
+        self.waiting_len() + self.deferred_len() + self.pending_len() + self.async_len()
     }
 
     /// Returns if the queue is empty
@@ -338,8 +472,13 @@ impl TaskManager {
 }
 
 pub fn add_scheduler(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> TaskManager {
-    let task_manager = TaskManager::new(feedback);
+    let task_manager = TaskManager::new(lua.clone(), feedback);
     lua.set_app_data(task_manager.clone());
+
+    // Also save error userdata
+    let error_userdata = crate::userdata::ErrorUserdata {}.into_lua(lua).unwrap();
+    lua.set_app_data(error_userdata);
+
     task_manager
 }
 

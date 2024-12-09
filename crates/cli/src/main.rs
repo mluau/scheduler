@@ -1,4 +1,5 @@
 use clap::Parser;
+use mlua::IntoLuaMulti;
 use mlua_scheduler::XRc;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
@@ -56,14 +57,23 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        pub struct TaskMgrFeedback {}
+        let error_fn = lua
+            .create_function(|_, e: mlua::Error| {
+                eprintln!("Error: {}", e);
+                Ok(())
+            })
+            .expect("Failed to create error function");
+
+        pub struct TaskMgrFeedback {
+            error_fn: mlua::Function,
+        }
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
             fn on_response(
                 &self,
                 label: &str,
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
-                _th: &mlua::Thread,
+                th: &mlua::Thread,
                 result: &Result<mlua::MultiValue, mlua::Error>,
             ) {
                 if let Err(e) = result {
@@ -72,7 +82,12 @@ fn main() {
             }
         }
 
-        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {}));
+        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(
+            &lua,
+            XRc::new(TaskMgrFeedback {
+                error_fn: error_fn.clone(),
+            }),
+        );
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
@@ -107,7 +122,7 @@ fn main() {
         lua.globals()
             .set(
                 "_TEST_ASYNC_WORK",
-                lua.create_async_function(|lua, n: u64| async move {
+                mlua_scheduler::r#async::create_async_task(|lua, n: u64| async move {
                     //let task_mgr = taskmgr::get(&lua);
                     println!("Async work: {}", n);
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
@@ -116,8 +131,10 @@ fn main() {
                     let created_table = lua.create_table()?;
                     created_table.set("test", "test")?;
 
-                    Ok(created_table)
+                    Err(mlua::Error::runtime("Test error"))
+                    //created_table.into_lua_multi(&lua)
                 })
+                .create_lua_function(&lua)
                 .expect("Failed to create async function"),
             )
             .expect("Failed to set _OS global");

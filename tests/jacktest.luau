@@ -1,6 +1,6 @@
 local thread = task.spawn(function()
     print("1")
-    print(task.wait(1))
+    print(_TEST_ASYNC_WORK(10))
     print("4")
     print(coroutine.yield())
     print("6")
