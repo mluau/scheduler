@@ -25,8 +25,11 @@ pub struct ThreadInfo {
 }
 
 pub struct AsyncThreadInfo {
-    pub thread: ThreadInfo,
-    pub callback: Pin<Box<dyn Future<Output = mlua::Result<mlua::MultiValue>>>>,
+    pub thread: mlua::Thread,
+    #[cfg(feature = "send")]
+    pub callback: Pin<Box<dyn (Future<Output = mlua::Result<mlua::MultiValue>>) + Send + Sync>>,
+    #[cfg(not(feature = "send"))]
+    pub callback: Pin<Box<dyn (Future<Output = mlua::Result<mlua::MultiValue>>)>>,
 }
 
 #[cfg(not(feature = "send"))]
@@ -96,7 +99,7 @@ impl TaskManager {
         &self,
         label: &str,
         thread: mlua::Thread,
-        args: impl IntoLuaMulti + std::marker::Unpin,
+        args: impl IntoLuaMulti + mlua::MaybeSend + crate::r#async::MaybeSync + std::marker::Unpin,
     ) -> mlua::Result<mlua::MultiValue> {
         log::debug!("StartResumeThread: {}", label);
 
@@ -133,13 +136,9 @@ impl TaskManager {
 
         let fut = async move { callback.call(lua, args_ref).await };
         log::debug!("Trying to add async thread to queue");
-        let tinfo = ThreadInfo {
-            thread,
-            args: args.clone(),
-        };
         let mut self_ref = self.inner.async_queue.borrow_mut();
         self_ref.push_front(AsyncThreadInfo {
-            thread: tinfo,
+            thread,
             callback: Box::pin(fut),
         });
         log::debug!("Added async thread to queue");
@@ -374,23 +373,20 @@ impl TaskManager {
         match result {
             Poll::Pending => Ok(Some(thread_info)),
             Poll::Ready(result) => {
-                self.inner.feedback.on_response(
-                    "AsyncThread",
-                    self,
-                    &thread_info.thread.thread,
-                    &result,
-                );
+                self.inner
+                    .feedback
+                    .on_response("AsyncThread", self, &thread_info.thread, &result);
 
                 match result {
                     Ok(result) => {
                         let result = self
-                            .resume_thread("AsyncThread", thread_info.thread.thread.clone(), result)
+                            .resume_thread("AsyncThread", thread_info.thread.clone(), result)
                             .await;
 
                         self.inner.feedback.on_response(
                             "AsyncThread.Resume",
                             self,
-                            &thread_info.thread.thread,
+                            &thread_info.thread,
                             &result,
                         );
 
@@ -408,13 +404,13 @@ impl TaskManager {
                         result.push_back(e.to_string().into_lua(&self.inner.lua)?);
 
                         let result = self
-                            .resume_thread("AsyncThread", thread_info.thread.thread.clone(), result)
+                            .resume_thread("AsyncThread", thread_info.thread.clone(), result)
                             .await;
 
                         self.inner.feedback.on_response(
                             "AsyncThread.Resume",
                             self,
-                            &thread_info.thread.thread,
+                            &thread_info.thread,
                             &result,
                         );
 

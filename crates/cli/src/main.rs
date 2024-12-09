@@ -131,8 +131,8 @@ fn main() {
                     let created_table = lua.create_table()?;
                     created_table.set("test", "test")?;
 
-                    Err(mlua::Error::runtime("Test error"))
-                    //created_table.into_lua_multi(&lua)
+                    //Err(mlua::Error::runtime("Test error"))
+                    created_table.into_lua_multi(&lua)
                 })
                 .create_lua_function(&lua)
                 .expect("Failed to create async function"),

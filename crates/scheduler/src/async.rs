@@ -1,5 +1,14 @@
 use mlua::prelude::*;
 
+#[cfg(feature = "send")]
+pub trait MaybeSync: Sync {}
+#[cfg(feature = "send")]
+impl<T: Sync> MaybeSync for T {}
+#[cfg(not(feature = "send"))]
+pub trait MaybeSync {}
+#[cfg(not(feature = "send"))]
+impl<T> MaybeSync for T {}
+
 /// An async callback
 #[cfg(not(feature = "send"))]
 #[async_trait::async_trait(?Send)]
@@ -10,9 +19,25 @@ pub trait AsyncCallback {
 
 /// An async callback
 #[cfg(feature = "send")]
-#[async_trait::async_trait]
-pub trait AsyncCallback {
-    async fn call(&mut self, lua: Lua, args: LuaMultiValue) -> LuaResult<mlua::MultiValue>;
+pub trait AsyncCallback: Send + Sync {
+    fn call<'life0, 'async_trait>(
+        &'life0 mut self,
+        lua: Lua,
+        args: LuaMultiValue,
+    ) -> ::core::pin::Pin<
+        Box<
+            dyn ::core::future::Future<Output = LuaResult<mlua::MultiValue>>
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                // We can't use direct async trait here as we need the future to be Send+Sync
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+        Self: Send + Sync;
+
     fn clone_box(&self) -> Box<dyn AsyncCallback>;
 }
 
@@ -75,9 +100,12 @@ return callback
 /// Creates an async task that can then be pushed to the scheduler
 pub fn create_async_task<A, F, FR>(func: F) -> AsyncCallbackData
 where
-    A: FromLuaMulti + mlua::MaybeSend + 'static,
-    F: Fn(Lua, A) -> FR + mlua::MaybeSend + Clone + 'static,
-    FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>> + mlua::MaybeSend + 'static,
+    A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+    F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
+    FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>>
+        + mlua::MaybeSend
+        + MaybeSync
+        + 'static,
 {
     /*let func_wrapper = lua
             .load(
@@ -127,17 +155,46 @@ where
     }
 
     #[cfg(feature = "send")]
-    #[async_trait::async_trait]
     impl<A, F, FR> AsyncCallback for AsyncCallbackWrapper<A, F, FR>
     where
-        A: FromLuaMulti + mlua::MaybeSend + 'static,
-        F: FnMut(Lua, A) -> FR + mlua::MaybeSend + 'static,
-        FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>> + mlua::MaybeSend + 'static,
+        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        F: FnMut(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
+        FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>>
+            + mlua::MaybeSend
+            + MaybeSync
+            + 'static,
     {
-        async fn call(&mut self, lua: &Lua, args: LuaMultiValue) -> LuaResult<mlua::MultiValue> {
-            let args = A::from_lua_multi(args, lua)?;
-            let fut = (self.func)(lua.clone(), args);
-            fut.await
+        fn call<'life0, 'async_trait>(
+            &'life0 mut self,
+            lua: Lua,
+            args: LuaMultiValue,
+        ) -> ::core::pin::Pin<
+            Box<
+                dyn ::core::future::Future<Output = LuaResult<mlua::MultiValue>>
+                    + ::core::marker::Send
+                    + ::core::marker::Sync
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            Self: 'async_trait,
+            // Bounds from trait:
+            Self: Send + Sync,
+        {
+            Box::pin(async move {
+                let args = A::from_lua_multi(args, &lua)?;
+                let fut = (self.func)(lua, args);
+                fut.await
+            })
+        }
+
+        fn clone_box(&self) -> Box<dyn AsyncCallback> {
+            let func = self.func.clone();
+            Box::new(AsyncCallbackWrapper {
+                func,
+                _marker: std::marker::PhantomData,
+            })
         }
     }
 

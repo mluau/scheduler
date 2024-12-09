@@ -46,6 +46,7 @@ coroutine.yield = function(...)
 end
 "#,
     )
+    .set_name("__sched_yield")
     .call::<()>(lua.app_data_ref::<mlua::Value>().unwrap().clone())?;
 
     Ok(())
