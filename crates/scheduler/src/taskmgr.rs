@@ -1,6 +1,6 @@
 use crate::{XRc, XRefCell};
 use futures_util::StreamExt;
-use mlua::{IntoLua, IntoLuaMulti};
+use mlua::IntoLua;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -99,7 +99,7 @@ impl TaskManager {
         &self,
         label: &str,
         thread: mlua::Thread,
-        args: impl IntoLuaMulti + mlua::MaybeSend + crate::r#async::MaybeSync + std::marker::Unpin,
+        args: mlua::MultiValue,
     ) -> mlua::Result<mlua::MultiValue> {
         log::debug!("StartResumeThread: {}", label);
 

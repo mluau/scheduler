@@ -57,23 +57,14 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        let error_fn = lua
-            .create_function(|_, e: mlua::Error| {
-                eprintln!("Error: {}", e);
-                Ok(())
-            })
-            .expect("Failed to create error function");
-
-        pub struct TaskMgrFeedback {
-            error_fn: mlua::Function,
-        }
+        pub struct TaskMgrFeedback {}
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
             fn on_response(
                 &self,
                 label: &str,
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
-                th: &mlua::Thread,
+                _th: &mlua::Thread,
                 result: &Result<mlua::MultiValue, mlua::Error>,
             ) {
                 if let Err(e) = result {
@@ -82,12 +73,7 @@ fn main() {
             }
         }
 
-        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(
-            &lua,
-            XRc::new(TaskMgrFeedback {
-                error_fn: error_fn.clone(),
-            }),
-        );
+        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {}));
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
