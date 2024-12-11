@@ -1,7 +1,7 @@
 use crate::{XRc, XRefCell};
 use futures_util::StreamExt;
 use mlua::IntoLua;
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,6 +12,27 @@ pub struct WaitingThread {
     thread: ThreadInfo,
     start: std::time::Instant,
     duration: std::time::Duration,
+}
+
+impl std::cmp::PartialEq for WaitingThread {
+    fn eq(&self, other: &Self) -> bool {
+        self.start + self.duration == other.start + other.duration
+    }
+}
+
+impl std::cmp::Eq for WaitingThread {}
+
+impl std::cmp::PartialOrd for WaitingThread {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::cmp::Ord for WaitingThread {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse order
+        (other.start + other.duration).cmp(&(self.start + self.duration))
+    }
 }
 
 pub struct DeferredThread {
@@ -67,7 +88,7 @@ pub struct TaskManagerInner {
     pub lua: mlua::Lua,
     pub pending_threads_count: XRc<AtomicU64>,
     pub async_queue: XRefCell<VecDeque<AsyncThreadInfo>>,
-    pub waiting_queue: XRefCell<VecDeque<WaitingThread>>,
+    pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     pub is_running: AtomicBool,
     pub feedback: XRc<dyn SchedulerFeedback>,
@@ -85,7 +106,7 @@ impl TaskManager {
             inner: TaskManagerInner {
                 pending_threads_count: XRc::new(AtomicU64::new(0)),
                 async_queue: XRefCell::new(VecDeque::default()),
-                waiting_queue: XRefCell::new(VecDeque::default()),
+                waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
                 is_running: AtomicBool::new(false),
                 feedback,
@@ -160,7 +181,7 @@ impl TaskManager {
         log::debug!("Trying to add thread to waiting queue");
         let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
-        self_ref.push_front(WaitingThread {
+        self_ref.push(WaitingThread {
             thread: tinfo,
             start: std::time::Instant::now(),
             duration,
@@ -228,14 +249,13 @@ impl TaskManager {
         }
 
         //log::debug!("Queue Length After Defer: {}", self.inner.len());
-        let mut readd_wait_list = Vec::new();
         {
             loop {
                 // Pop element from self_ref
                 let entry = {
                     let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
-                    let Some(entry) = self_ref.pop_back() else {
+                    let Some(entry) = self_ref.pop() else {
                         break;
                     };
 
@@ -243,7 +263,9 @@ impl TaskManager {
                 };
 
                 if let Some(entry) = self.process_waiting_thread(entry).await {
-                    readd_wait_list.push(entry);
+                    let mut self_ref = self.inner.waiting_queue.borrow_mut();
+                    self_ref.push(entry);
+                    break; // Because we have a binary heap, we can break here as order is maintained
                 }
             }
         }
@@ -270,16 +292,6 @@ impl TaskManager {
             for entry in readd_async_list {
                 self_ref.push_back(entry);
             }
-        }
-
-        if !readd_wait_list.is_empty() {
-            // Readd threads that need to be re-added
-            let mut self_ref = self.inner.waiting_queue.borrow_mut();
-            for entry in readd_wait_list {
-                self_ref.push_back(entry);
-            }
-
-            drop(self_ref);
         }
 
         // Check all_threads, removing all finished threads and resuming all threads not in deferred_queue or waiting_queue
