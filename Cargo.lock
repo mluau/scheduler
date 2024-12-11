@@ -677,6 +677,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mlua_scheduler_ext"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "flume",
+ "futures-util",
+ "indexmap",
+ "log",
+ "mlua",
+ "mlua_scheduler",
+ "scc",
+ "smol",
+ "tokio",
+]
+
+[[package]]
 name = "nanorand"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

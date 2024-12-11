@@ -13,7 +13,7 @@ fn get_default_log_path() -> PathBuf {
 #[derive(Debug, Parser)]
 struct Cli {
     #[arg(default_value=get_default_log_path().into_os_string())]
-    path: PathBuf,
+    path: Vec<PathBuf>,
 }
 
 async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
@@ -60,6 +60,9 @@ fn main() {
         pub struct TaskMgrFeedback {}
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
+            #[cfg(feature = "thread_caller_tracking")]
+            fn on_thread_add(&self, _creator: &mlua::Thread, _thread: &mlua::Thread) {}
+
             fn on_response(
                 &self,
                 label: &str,
@@ -92,9 +95,9 @@ fn main() {
                 "_TEST_SYNC_WORK",
                 lua.create_async_function(|lua, n: u64| async move {
                     //let task_mgr = taskmgr::get(&lua);
-                    println!("Async work: {}", n);
+                    //println!("Async work: {}", n);
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    println!("Async work done: {}", n);
+                    //println!("Async work done: {}", n);
 
                     let created_table = lua.create_table()?;
                     created_table.set("test", "test")?;
@@ -110,15 +113,17 @@ fn main() {
                 "_TEST_ASYNC_WORK",
                 mlua_scheduler::r#async::create_async_task(|lua, n: u64| async move {
                     //let task_mgr = taskmgr::get(&lua);
-                    println!("Async work: {}", n);
+                    //println!("Async work: {}", n);
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    println!("Async work done: {}", n);
+                    //println!("Async work done: {}", n);
 
-                    let created_table = lua.create_table()?;
-                    created_table.set("test", "test")?;
+                    //let created_table = lua.create_table()?;
+                    //created_table.set("test", "test")?;
 
                     //Err(mlua::Error::runtime("Test error"))
-                    created_table.into_lua_multi(&lua)
+                    //created_table.into_lua_multi(&lua)
+
+                    ().into_lua_multi(&lua)
                 })
                 .create_lua_function(&lua)
                 .expect("Failed to create async function"),
@@ -136,9 +141,11 @@ fn main() {
 
         lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
 
-        spawn_script(lua.clone(), cli.path)
-            .await
-            .expect("Failed to spawn script");
+        for path in cli.path {
+            spawn_script(lua.clone(), path)
+                .await
+                .expect("Failed to spawn script");
+        }
 
         task_mgr.wait_till_done(Duration::from_millis(100)).await;
 

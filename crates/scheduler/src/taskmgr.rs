@@ -34,6 +34,12 @@ pub struct AsyncThreadInfo {
 
 #[cfg(not(feature = "send"))]
 pub trait SchedulerFeedback {
+    #[cfg(feature = "thread_caller_tracking")]
+    /// Function that is called whenever a thread is added/known to the task manager
+    ///
+    /// Contains both the creator thread and the thread that was added
+    fn on_thread_add(&self, creator: &mlua::Thread, thread: &mlua::Thread);
+
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
         &self,
@@ -426,6 +432,13 @@ impl TaskManager {
         self.inner.is_running.store(false, Ordering::Relaxed);
     }
 
+    /// Clears the task manager queues completely
+    pub fn clear(&self) {
+        self.inner.async_queue.borrow_mut().clear();
+        self.inner.waiting_queue.borrow_mut().clear();
+        self.inner.deferred_queue.borrow_mut().clear();
+    }
+
     /// Returns the waiting queue length
     pub fn waiting_len(&self) -> usize {
         self.inner.waiting_queue.borrow().len()
@@ -456,6 +469,7 @@ impl TaskManager {
         self.len() == 0
     }
 
+    /// Waits until the task manager is done
     pub async fn wait_till_done(&self, sleep_interval: Duration) {
         while self.is_running() {
             if self.is_empty() {
@@ -467,13 +481,20 @@ impl TaskManager {
     }
 }
 
+#[derive(Clone)]
+pub struct ErrorUserdata {}
+
+impl mlua::UserData for ErrorUserdata {}
+
+pub struct ErrorUserdataValue(pub mlua::Value);
+
 pub fn add_scheduler(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> TaskManager {
     let task_manager = TaskManager::new(lua.clone(), feedback);
     lua.set_app_data(task_manager.clone());
 
     // Also save error userdata
-    let error_userdata = crate::userdata::ErrorUserdata {}.into_lua(lua).unwrap();
-    lua.set_app_data(error_userdata);
+    let error_userdata = ErrorUserdata {}.into_lua(lua).unwrap();
+    lua.set_app_data(ErrorUserdataValue(error_userdata));
 
     task_manager
 }

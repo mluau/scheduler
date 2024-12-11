@@ -12,5 +12,6 @@ clap = { version = "4.5.20", features = ["derive", "string"] }
 env_logger = "0.11"
 
 [features]
-default = ["ncg"]
+default = ["ncg", "thread_caller_tracking"]
+thread_caller_tracking = []
 ncg = ["mlua/luau-jit"]

@@ -1,5 +1,5 @@
 [package]
-name = "mlua_scheduler"
+name = "mlua_scheduler_ext"
 version = "1.0.0"
 edition = "2021"
 
@@ -11,12 +11,12 @@ flume = "0.11.1"
 # async-task = "4.7.1"
 # flume = "0.11.1"
 tokio = { version = "1", features = ["rt", "macros", "fs", "time", "sync"] }
+mlua_scheduler = { path = "../scheduler" }
 log = "0.4"
 scc = "2"
 futures-util = "0.3.31"
 async-trait = "0.1"
 
 [features]
-default = ["thread_caller_tracking"]
-thread_caller_tracking = []
+default = []
 send = ["mlua/send"]
