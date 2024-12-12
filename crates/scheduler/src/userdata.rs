@@ -12,11 +12,6 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
 
             let curr_thread = lua.current_thread();
 
-            taskmgr
-                .inner
-                .feedback
-                .can_create_thread("CoroutineCreate", &curr_thread)?;
-
             let th = lua.create_thread(f)?;
 
             taskmgr
@@ -129,23 +124,16 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         "__addWaitingWithArgs",
         lua.create_function(
             |lua, (f, resume, args): (LuaEither<LuaFunction, LuaThread>, f64, LuaMultiValue)| {
-                let taskmgr = super::taskmgr::get(lua);
-                let current_thread = lua.current_thread();
                 let th = match f {
-                    LuaEither::Left(f) => {
-                        taskmgr
-                            .inner
-                            .feedback
-                            .can_create_thread("CoroutineCreate", &current_thread)?;
-
-                        lua.create_thread(f)?
-                    }
+                    LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
 
+                let taskmgr = super::taskmgr::get(lua);
+
                 taskmgr.inner.feedback.on_thread_add(
                     "WaitingThreadWithArgs",
-                    &current_thread,
+                    &lua.current_thread(),
                     &th,
                 )?;
 
@@ -163,26 +151,20 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         "__addDeferred",
         lua.create_function(
             |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
-                let taskmgr = super::taskmgr::get(lua);
-                let curr_thread = lua.current_thread();
                 let th = match f {
-                    LuaEither::Left(f) => {
-                        taskmgr
-                            .inner
-                            .feedback
-                            .can_create_thread("DeferredThread", &curr_thread)?;
-
-                        lua.create_thread(f)?
-                    }
+                    LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
 
-                taskmgr
-                    .inner
-                    .feedback
-                    .on_thread_add("DeferredThread", &curr_thread, &th)?;
+                let taskmgr = super::taskmgr::get(lua);
 
-                taskmgr.add_deferred_thread(th.clone(), args);
+                taskmgr.inner.feedback.on_thread_add(
+                    "DeferredThread",
+                    &lua.current_thread(),
+                    &th,
+                )?;
+
+                taskmgr.add_deferred_thread_front(th.clone(), args);
                 Ok(th)
             },
         )?,
@@ -240,24 +222,17 @@ return {
         "spawn",
         lua.create_async_function(
             |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| async move {
-                let taskmgr = super::taskmgr::get(&lua);
-                let current_thread = lua.current_thread();
                 let t = match f {
-                    LuaEither::Left(f) => {
-                        taskmgr
-                            .inner
-                            .feedback
-                            .can_create_thread("TaskSpawn", &current_thread)?;
-
-                        lua.create_thread(f)?
-                    }
+                    LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
+
+                let taskmgr = super::taskmgr::get(&lua);
 
                 taskmgr
                     .inner
                     .feedback
-                    .on_thread_add("TaskSpawn", &current_thread, &t)?;
+                    .on_thread_add("TaskSpawn", &lua.current_thread(), &t)?;
 
                 let result = taskmgr.resume_thread("TaskSpawn", t.clone(), args).await;
 

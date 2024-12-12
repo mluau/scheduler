@@ -63,25 +63,22 @@ fn main() {
         }
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
-            fn can_create_thread(&self, _label: &str, _creator: &mlua::Thread) -> mlua::Result<()> {
-                if self
-                    .created
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                    >= self.limit
-                {
-                    return Err(mlua::Error::RuntimeError(
-                        "Thread limit reached".to_string(),
-                    ));
-                }
-                Ok(())
-            }
-
             fn on_thread_add(
                 &self,
                 _label: &str,
                 _creator: &mlua::Thread,
                 _thread: &mlua::Thread,
             ) -> mlua::Result<()> {
+                if self
+                    .created
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    >= self.limit
+                {
+                    return Err(mlua::Error::RuntimeError(
+                        "Thread create+spawn+add limit reached".to_string(),
+                    ));
+                }
+
                 Ok(())
             }
 
@@ -98,13 +95,15 @@ fn main() {
             }
         }
 
-        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(
-            &lua,
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
+            lua.clone(),
             XRc::new(TaskMgrFeedback {
-                limit: 1000,
+                limit: 100000000,
                 created: AtomicU64::new(0),
             }),
         );
+
+        task_mgr.attach(&lua);
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {

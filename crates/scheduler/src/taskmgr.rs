@@ -55,13 +55,6 @@ pub struct AsyncThreadInfo {
 
 #[cfg(not(feature = "send"))]
 pub trait SchedulerFeedback {
-    /// Function that is called whenever the scheduler tries to create a thread
-    ///
-    /// Return a mlua::Error to stop the thread from being created
-    ///
-    /// Useful for sandboxing purposes
-    fn can_create_thread(&self, label: &str, creator: &mlua::Thread) -> mlua::Result<()>;
-
     /// Function that is called whenever a thread is added/known to the task manager
     ///
     /// Contains both the creator thread and the thread that was added
@@ -129,6 +122,7 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
+    /// Creates a new task manager
     pub fn new(lua: mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
             inner: TaskManagerInner {
@@ -142,6 +136,15 @@ impl TaskManager {
             }
             .into(),
         }
+    }
+
+    /// Attaches the task manager to the lua state
+    pub fn attach(&self, lua: &mlua::Lua) {
+        lua.set_app_data(self.clone());
+
+        // Also save error userdata
+        let error_userdata = ErrorUserdata {}.into_lua(lua).unwrap();
+        lua.set_app_data(ErrorUserdataValue(error_userdata));
     }
 
     /// Returns whether the task manager is running
@@ -215,12 +218,21 @@ impl TaskManager {
         log::debug!("Added thread to waiting queue");
     }
 
-    /// Adds a deferred thread to the task manager
-    pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+    /// Adds a deferred thread to the task manager to the front of the queue
+    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
         let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread: tinfo });
+        log::debug!("Added deferred thread to queue");
+    }
+
+    /// Adds a deferred thread to the task manager to the front of the queue
+    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+        log::debug!("Adding deferred thread to queue");
+        let tinfo = ThreadInfo { thread, args };
+        let mut self_ref = self.inner.deferred_queue.borrow_mut();
+        self_ref.push_back(DeferredThread { thread: tinfo });
         log::debug!("Added deferred thread to queue");
     }
 
@@ -528,17 +540,6 @@ pub struct ErrorUserdata {}
 impl mlua::UserData for ErrorUserdata {}
 
 pub struct ErrorUserdataValue(pub mlua::Value);
-
-pub fn add_scheduler(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> TaskManager {
-    let task_manager = TaskManager::new(lua.clone(), feedback);
-    lua.set_app_data(task_manager.clone());
-
-    // Also save error userdata
-    let error_userdata = ErrorUserdata {}.into_lua(lua).unwrap();
-    lua.set_app_data(ErrorUserdataValue(error_userdata));
-
-    task_manager
-}
 
 pub fn get(lua: &mlua::Lua) -> TaskManager {
     lua.app_data_ref::<TaskManager>()
