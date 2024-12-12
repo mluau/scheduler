@@ -1,5 +1,4 @@
 use clap::Parser;
-use mlua::IntoLuaMulti;
 use mlua_scheduler::XRc;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
@@ -138,7 +137,7 @@ fn main() {
         lua.globals()
             .set(
                 "_TEST_ASYNC_WORK",
-                mlua_scheduler::r#async::create_async_task(|lua, n: u64| async move {
+                mlua_scheduler::r#async::create_async_task(|_, n: u64| async move {
                     //let task_mgr = taskmgr::get(&lua);
                     //println!("Async work: {}", n);
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
@@ -150,7 +149,7 @@ fn main() {
                     //Err(mlua::Error::runtime("Test error"))
                     //created_table.into_lua_multi(&lua)
 
-                    ().into_lua_multi(&lua)
+                    Ok(())
                 })
                 .create_lua_function(&lua)
                 .expect("Failed to create async function"),
