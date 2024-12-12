@@ -77,13 +77,6 @@ pub trait SchedulerFeedback {
 
 #[cfg(feature = "send")]
 pub trait SchedulerFeedback: Send + Sync {
-    /// Function that is called whenever the scheduler tries to create a thread
-    ///
-    /// Return a mlua::Error to stop the thread from being created
-    ///
-    /// Useful for sandboxing purposes
-    fn can_create_thread(&self, label: &str, creator: &mlua::Thread) -> mlua::Result<()>;
-
     /// Function that is called whenever a thread is added/known to the task manager
     ///
     /// Contains both the creator thread and the thread that was added
