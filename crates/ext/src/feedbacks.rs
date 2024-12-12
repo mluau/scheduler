@@ -48,7 +48,7 @@ impl SchedulerFeedback for MultipleSchedulerFeedback {
 
 /// Tracks the threads known to the scheduler to the thread which initiated them
 pub struct ThreadTracker {
-    pub threads_known: XRefCell<HashMap<String, String>>,
+    threads_known: XRefCell<HashMap<String, String>>,
 }
 
 impl ThreadTracker {
@@ -126,7 +126,7 @@ impl SchedulerFeedback for ThreadTracker {
 
 /// Tracks the results of threads
 pub struct ThreadResultTracker {
-    pub results: XRefCell<HashMap<String, Result<mlua::MultiValue, mlua::Error>>>,
+    results: XRefCell<HashMap<String, Result<mlua::MultiValue, mlua::Error>>>,
 }
 
 impl ThreadResultTracker {
