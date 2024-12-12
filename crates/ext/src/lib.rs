@@ -1,3 +1,4 @@
+pub mod feedbacks;
 pub mod traits;
 
 use mlua_scheduler::taskmgr::TaskManager;
