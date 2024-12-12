@@ -16,7 +16,3 @@ log = "0.4"
 scc = "2"
 futures-util = "0.3.31"
 async-trait = "0.1"
-
-[features]
-default = ["send"]
-send = ["mlua/send"]
