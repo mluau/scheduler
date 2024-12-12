@@ -98,51 +98,37 @@ return callback
 }
 
 /// Creates an async task that can then be pushed to the scheduler
-pub fn create_async_task<A, F, FR>(func: F) -> AsyncCallbackData
+pub fn create_async_task<A, F, R, FR>(func: F) -> AsyncCallbackData
 where
     A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
     F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-    FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>>
-        + mlua::MaybeSend
-        + MaybeSync
-        + 'static,
+    R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+    FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
 {
-    /*let func_wrapper = lua
-            .load(
-                r#"
-    return function(...) end
-            "#,
-            )
-            .set_environment(lua.globals())
-            .call::<LuaTable>(())?;*/
-
-    /*let wrapper_fn = |lua: Lua, args: LuaMultiValue| async {
-        let args = A::from_lua_multi(args, &lua)?;
-        (func)(lua, args).await
-    };
-
-    return AsyncCallbackData {
-        callback: Box::new(wrapper_fn),
-    };*/
-
     #[derive(Copy, Clone)]
-    pub struct AsyncCallbackWrapper<A, F, FR> {
+    pub struct AsyncCallbackWrapper<A, F, R, FR> {
         func: F,
-        _marker: std::marker::PhantomData<(A, FR)>,
+        _marker: std::marker::PhantomData<(A, R, FR)>,
     }
 
     #[cfg(not(feature = "send"))]
     #[async_trait::async_trait(?Send)]
-    impl<A, F, FR> AsyncCallback for AsyncCallbackWrapper<A, F, FR>
+    impl<A, F, R, FR> AsyncCallback for AsyncCallbackWrapper<A, F, R, FR>
     where
         A: FromLuaMulti + mlua::MaybeSend + 'static,
         F: FnMut(Lua, A) -> FR + mlua::MaybeSend + Clone + 'static,
-        FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>> + mlua::MaybeSend + 'static,
+        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + 'static,
     {
         async fn call(&mut self, lua: Lua, args: LuaMultiValue) -> LuaResult<mlua::MultiValue> {
             let args = A::from_lua_multi(args, &lua)?;
-            let fut = (self.func)(lua, args);
-            fut.await
+            let fut = (self.func)(lua.clone(), args);
+            let res = fut.await;
+
+            match res {
+                Ok(res) => res.into_lua_multi(&lua),
+                Err(err) => Err(err),
+            }
         }
 
         fn clone_box(&self) -> Box<dyn AsyncCallback> {
@@ -198,7 +184,7 @@ where
         }
     }
 
-    let wrapper: AsyncCallbackWrapper<A, F, FR> = AsyncCallbackWrapper {
+    let wrapper: AsyncCallbackWrapper<A, F, R, FR> = AsyncCallbackWrapper {
         func,
         _marker: std::marker::PhantomData,
     };

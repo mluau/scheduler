@@ -146,7 +146,7 @@ impl TaskManager {
     }
 
     /// Resumes a thread to next
-    pub async fn resume_thread<'a>(
+    pub async fn resume_thread(
         &self,
         label: &str,
         thread: mlua::Thread,

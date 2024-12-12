@@ -51,6 +51,12 @@ pub struct ThreadTracker {
     threads_known: XRefCell<HashMap<String, String>>,
 }
 
+impl Default for ThreadTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadTracker {
     /// Creates a new thread tracker
     pub fn new() -> Self {
@@ -127,6 +133,12 @@ impl SchedulerFeedback for ThreadTracker {
 /// Tracks the results of threads
 pub struct ThreadResultTracker {
     results: XRefCell<HashMap<String, Result<mlua::MultiValue, mlua::Error>>>,
+}
+
+impl Default for ThreadResultTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThreadResultTracker {

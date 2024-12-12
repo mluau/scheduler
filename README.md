@@ -9,6 +9,7 @@ A Roblox-like scheduler for mlua
 - Properly working ``coroutine.yield`` and ``coroutine.resume`` functions that produce equivalent (mostly) results in Roblox's own Luau + Task Scheduling code
 - Both mlua non-send and send features supported (thanks to rust async wizardry).
 - Custom async function handling that works with Lua's coroutine design paradigm without breaking on edge-cases.
+- Simple callback API for controlling the scheduler (`SchedulerFeedback` trait)
 
 ## Deviations from Roblox's scheduler
 
@@ -30,3 +31,10 @@ task.delay(2, function()
     coroutine.resume(thread, "d")
 end)
 ```
+
+## Inner Workings
+
+- Waiting tasks are stored in a priority queue (binary heap) hence allowing the scheduler to only process ready tasks.
+- Deferred tasks and async tasks are stored in a standard VecDeque.
+- When processing, the scheduler runs in the following order: async -> waiting -> deferred.
+- For proper async support, you must use the schedulers provided ``async`` module (see below).

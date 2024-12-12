@@ -1,5 +1,6 @@
 use crate::Scheduler;
 use mlua::prelude::*;
+use mlua_scheduler::r#async::MaybeSync;
 
 /**
     Trait for any struct that can be turned into an [`LuaThread`]
@@ -78,7 +79,7 @@ pub trait LuaSchedulerExt {
 
         # Panics
 
-        Panics if called outside of a running [`Scheduler`].
+        Panics if called outside of a running [`mlua_scheduler::TaskManager`].
     */
     fn push_thread_front(
         &self,
@@ -93,13 +94,23 @@ pub trait LuaSchedulerExt {
 
         # Panics
 
-        Panics if called outside of a running [`Scheduler`].
+        Panics if called outside of a running [`mlua_scheduler::TaskManager`].
     */
     fn push_thread_back(
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
     ) -> LuaResult<mlua::Thread>;
+
+    /**
+     * Creates a scheduler-handled async function
+     */
+    fn create_scheduler_async_function<A, F, R, FR>(&self, func: F) -> LuaResult<LuaFunction>
+    where
+        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
+        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static;
 }
 
 impl LuaSchedulerExt for Lua {
@@ -116,8 +127,8 @@ impl LuaSchedulerExt for Lua {
         args: impl IntoLuaMulti,
     ) -> LuaResult<mlua::Thread> {
         let scheduler = self
-            .app_data_ref::<Scheduler>()
-            .expect("No scheduler attached");
+            .app_data_ref::<mlua_scheduler::TaskManager>()
+            .expect("No task manager attached");
 
         let thread = thread.into_lua_thread(self)?;
         let args = args.into_lua_multi(self)?;
@@ -133,8 +144,8 @@ impl LuaSchedulerExt for Lua {
         args: impl IntoLuaMulti,
     ) -> LuaResult<mlua::Thread> {
         let scheduler = self
-            .app_data_ref::<Scheduler>()
-            .expect("No scheduler attached");
+            .app_data_ref::<mlua_scheduler::TaskManager>()
+            .expect("No task manager attached");
 
         let thread = thread.into_lua_thread(self)?;
         let args = args.into_lua_multi(self)?;
@@ -142,5 +153,17 @@ impl LuaSchedulerExt for Lua {
         scheduler.add_deferred_thread_back(thread.clone(), args);
 
         Ok(thread)
+    }
+
+    fn create_scheduler_async_function<A, F, R, FR>(&self, func: F) -> LuaResult<LuaFunction>
+    where
+        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
+        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
+    {
+        let func = mlua_scheduler::r#async::create_async_task(func);
+
+        func.create_lua_function(self)
     }
 }
