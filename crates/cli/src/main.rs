@@ -172,9 +172,9 @@ fn main() {
             spawn_script(lua.clone(), path)
                 .await
                 .expect("Failed to spawn script");
-        }
 
-        task_mgr.wait_till_done(Duration::from_millis(100)).await;
+            task_mgr.wait_till_done(Duration::from_millis(100)).await;
+        }
 
         println!("Stopping task manager");
 
