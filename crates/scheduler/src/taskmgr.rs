@@ -55,11 +55,22 @@ pub struct AsyncThreadInfo {
 
 #[cfg(not(feature = "send"))]
 pub trait SchedulerFeedback {
-    #[cfg(feature = "thread_caller_tracking")]
+    /// Function that is called whenever the scheduler tries to create a thread
+    ///
+    /// Return a mlua::Error to stop the thread from being created
+    ///
+    /// Useful for sandboxing purposes
+    fn can_create_thread(&self, label: &str, creator: &mlua::Thread) -> mlua::Result<()>;
+
     /// Function that is called whenever a thread is added/known to the task manager
     ///
     /// Contains both the creator thread and the thread that was added
-    fn on_thread_add(&self, creator: &mlua::Thread, thread: &mlua::Thread);
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()>;
 
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
@@ -67,19 +78,36 @@ pub trait SchedulerFeedback {
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: &Result<mlua::MultiValue, mlua::Error>,
+        result: Option<&mlua::Result<mlua::MultiValue>>,
     );
 }
 
 #[cfg(feature = "send")]
 pub trait SchedulerFeedback: Send + Sync {
+    /// Function that is called whenever the scheduler tries to create a thread
+    ///
+    /// Return a mlua::Error to stop the thread from being created
+    ///
+    /// Useful for sandboxing purposes
+    fn can_create_thread(&self, label: &str, creator: &mlua::Thread) -> mlua::Result<()>;
+
+    /// Function that is called whenever a thread is added/known to the task manager
+    ///
+    /// Contains both the creator thread and the thread that was added
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()>;
+
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
         &self,
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: &Result<mlua::MultiValue, mlua::Error>,
+        result: Option<&mlua::Result<mlua::MultiValue>>,
     );
 }
 
@@ -122,12 +150,12 @@ impl TaskManager {
     }
 
     /// Resumes a thread to next
-    pub async fn resume_thread(
+    pub async fn resume_thread<'a>(
         &self,
         label: &str,
         thread: mlua::Thread,
         args: mlua::MultiValue,
-    ) -> mlua::Result<mlua::MultiValue> {
+    ) -> Option<mlua::Result<mlua::MultiValue>> {
         log::debug!("StartResumeThread: {}", label);
 
         self.inner
@@ -136,9 +164,7 @@ impl TaskManager {
 
         let mut async_thread = thread.into_async::<mlua::MultiValue>(args);
 
-        let Some(next) = async_thread.next().await else {
-            return Ok(mlua::MultiValue::new());
-        };
+        let next = async_thread.next().await;
 
         self.inner
             .pending_threads_count
@@ -322,7 +348,7 @@ impl TaskManager {
                     "DeferredThread",
                     self,
                     &thread_info.thread.thread,
-                    &result,
+                    result.as_ref(),
                 );
             }
         }
@@ -367,7 +393,7 @@ impl TaskManager {
                         "WaitingThread",
                         self,
                         &thread_info.thread.thread,
-                        &result,
+                        result.as_ref(),
                     );
 
                     None
@@ -391,9 +417,12 @@ impl TaskManager {
         match result {
             Poll::Pending => Ok(Some(thread_info)),
             Poll::Ready(result) => {
-                self.inner
-                    .feedback
-                    .on_response("AsyncThread", self, &thread_info.thread, &result);
+                self.inner.feedback.on_response(
+                    "AsyncThread",
+                    self,
+                    &thread_info.thread,
+                    Some(&result),
+                );
 
                 match result {
                     Ok(result) => {
@@ -405,7 +434,7 @@ impl TaskManager {
                             "AsyncThread.Resume",
                             self,
                             &thread_info.thread,
-                            &result,
+                            result.as_ref(),
                         );
 
                         Ok(None)
@@ -426,10 +455,10 @@ impl TaskManager {
                             .await;
 
                         self.inner.feedback.on_response(
-                            "AsyncThread.Resume",
+                            "AsyncThread",
                             self,
                             &thread_info.thread,
-                            &result,
+                            result.as_ref(),
                         );
 
                         Ok(None)

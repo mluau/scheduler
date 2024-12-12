@@ -17,6 +17,5 @@ futures-util = "0.3.31"
 async-trait = "0.1"
 
 [features]
-default = ["thread_caller_tracking"]
-thread_caller_tracking = []
+default = []
 send = ["mlua/send"]

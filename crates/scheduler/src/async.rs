@@ -247,7 +247,6 @@ mod tests {
         });
 
         fn a(t: AsyncCallbackData) -> AsyncCallbackData {
-            let t = t;
             t
         }
 

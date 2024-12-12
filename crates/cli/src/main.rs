@@ -2,7 +2,7 @@ use clap::Parser;
 use mlua::IntoLuaMulti;
 use mlua_scheduler::XRc;
 use smol::fs;
-use std::{env::consts::OS, path::PathBuf, time::Duration};
+use std::{env::consts::OS, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")
@@ -57,26 +57,54 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        pub struct TaskMgrFeedback {}
+        pub struct TaskMgrFeedback {
+            pub limit: u64,
+            pub created: AtomicU64,
+        }
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
-            #[cfg(feature = "thread_caller_tracking")]
-            fn on_thread_add(&self, _creator: &mlua::Thread, _thread: &mlua::Thread) {}
+            fn can_create_thread(&self, _label: &str, _creator: &mlua::Thread) -> mlua::Result<()> {
+                if self
+                    .created
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    >= self.limit
+                {
+                    return Err(mlua::Error::RuntimeError(
+                        "Thread limit reached".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+
+            fn on_thread_add(
+                &self,
+                _label: &str,
+                _creator: &mlua::Thread,
+                _thread: &mlua::Thread,
+            ) -> mlua::Result<()> {
+                Ok(())
+            }
 
             fn on_response(
                 &self,
                 label: &str,
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
                 _th: &mlua::Thread,
-                result: &Result<mlua::MultiValue, mlua::Error>,
+                result: Option<&Result<mlua::MultiValue, mlua::Error>>,
             ) {
-                if let Err(e) = result {
+                if let Some(Err(e)) = result {
                     eprintln!("Error [{}]: {}", label, e);
                 }
             }
         }
 
-        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(&lua, XRc::new(TaskMgrFeedback {}));
+        let task_mgr = mlua_scheduler::taskmgr::add_scheduler(
+            &lua,
+            XRc::new(TaskMgrFeedback {
+                limit: 1000,
+                created: AtomicU64::new(0),
+            }),
+        );
 
         let task_mgr_ref = task_mgr.clone();
         local.spawn_local(async move {
@@ -133,7 +161,7 @@ fn main() {
         lua.globals()
             .set(
                 "task",
-                mlua_scheduler::userdata::table(&lua).expect("Failed to create table"),
+                mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
             )
             .expect("Failed to set task global");
 
