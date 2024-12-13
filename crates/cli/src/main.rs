@@ -1,5 +1,6 @@
 use clap::Parser;
 use mlua_scheduler::XRc;
+use mlua_scheduler_ext::traits::LuaSchedulerExt;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
 
@@ -96,6 +97,7 @@ fn main() {
 
         let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
             lua.clone(),
+            mlua_scheduler::AsyncHandleMode::PollNTimes(1),
             XRc::new(TaskMgrFeedback {
                 limit: 100000000,
                 created: AtomicU64::new(0),
@@ -137,21 +139,10 @@ fn main() {
         lua.globals()
             .set(
                 "_TEST_ASYNC_WORK",
-                mlua_scheduler::r#async::create_async_task(|_, n: u64| async move {
-                    //let task_mgr = taskmgr::get(&lua);
-                    //println!("Async work: {}", n);
+                lua.create_scheduler_async_function(|_, n: u64| async move {
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    //println!("Async work done: {}", n);
-
-                    //let created_table = lua.create_table()?;
-                    //created_table.set("test", "test")?;
-
-                    //Err(mlua::Error::runtime("Test error"))
-                    //created_table.into_lua_multi(&lua)
-
                     Ok(())
                 })
-                .create_lua_function(&lua)
                 .expect("Failed to create async function"),
             )
             .expect("Failed to set _OS global");

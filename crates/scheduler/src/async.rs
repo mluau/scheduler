@@ -141,14 +141,12 @@ where
     }
 
     #[cfg(feature = "send")]
-    impl<A, F, FR> AsyncCallback for AsyncCallbackWrapper<A, F, FR>
+    impl<A, F, R, FR> AsyncCallback for AsyncCallbackWrapper<A, F, R, FR>
     where
         A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
         F: FnMut(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-        FR: futures_util::Future<Output = LuaResult<mlua::MultiValue>>
-            + mlua::MaybeSend
-            + MaybeSync
-            + 'static,
+        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
     {
         fn call<'life0, 'async_trait>(
             &'life0 mut self,
@@ -170,8 +168,13 @@ where
         {
             Box::pin(async move {
                 let args = A::from_lua_multi(args, &lua)?;
-                let fut = (self.func)(lua, args);
-                fut.await
+                let fut = (self.func)(lua.clone(), args);
+                let res = fut.await;
+
+                match res {
+                    Ok(res) => res.into_lua_multi(&lua),
+                    Err(err) => Err(err),
+                }
             })
         }
 

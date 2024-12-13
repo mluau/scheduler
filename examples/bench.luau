@@ -3,7 +3,7 @@ local task = task or require("@lune/task")
 
 local started = os.clock()
 
-local amount = 400000
+local amount = 100000
 local batches = 5
 local per_batch = amount / batches
 
@@ -16,7 +16,7 @@ for current = 1, batches do
 		--print("Spawning thread #" .. i)
 		task.spawn(function()
 			task.wait(0.1)
-
+			--_TEST_ASYNC_WORK(0.1)
 			if i == per_batch then
 				print("Last thread in batch #" .. current)
 				assert(coroutine.status(thread) == "suspended", `Thread {i} has status {coroutine.status(thread)}`)

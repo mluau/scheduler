@@ -2,7 +2,7 @@ pub mod r#async;
 pub mod taskmgr;
 pub mod userdata;
 
-pub use taskmgr::TaskManager;
+pub use taskmgr::{AsyncHandleMode, TaskManager};
 
 /// Spawns a function on the Lua runtime
 pub fn spawn_thread(lua: mlua::Lua, th: mlua::Thread, args: mlua::MultiValue) {

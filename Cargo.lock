@@ -672,6 +672,7 @@ dependencies = [
  "env_logger",
  "mlua",
  "mlua_scheduler",
+ "mlua_scheduler_ext",
  "smol",
  "tokio",
 ]

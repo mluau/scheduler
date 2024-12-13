@@ -104,6 +104,13 @@ pub trait LuaSchedulerExt {
 
     /**
      * Creates a scheduler-handled async function
+     *
+     * Note that while `create_async_function` can still be used. Functions that need to have Lua scheduler aware
+     * characteristics should use this function instead.
+     *
+     * # Panics
+     *
+     * Panics if called outside of a running [`mlua_scheduler::TaskManager`].
      */
     fn create_scheduler_async_function<A, F, R, FR>(&self, func: F) -> LuaResult<LuaFunction>
     where

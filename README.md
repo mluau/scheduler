@@ -38,3 +38,7 @@ end)
 - Deferred tasks and async tasks are stored in a standard VecDeque.
 - When processing, the scheduler runs in the following order: async -> waiting -> deferred.
 - For proper async support, you must use the schedulers provided ``async`` module (see below).
+
+## Async Slowness
+
+This is unf
