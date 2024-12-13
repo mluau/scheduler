@@ -41,134 +41,271 @@ fn main() {
     // Create tokio runtime and use spawn_local
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        .worker_threads(10)
         .build()
         .unwrap();
 
-    let local = tokio::task::LocalSet::new();
+    #[cfg(feature = "multithread")]
+    {
+        assert!(mlua_scheduler::IS_SEND);
 
-    local.block_on(&rt, async {
-        let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
-            .expect("Failed to create Lua");
+        rt.block_on(async {
+            let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+                .expect("Failed to create Lua");
 
-        #[cfg(feature = "ncg")]
-        lua.enable_jit(true);
+            #[cfg(feature = "ncg")]
+            lua.enable_jit(true);
 
-        let compiler = mlua::Compiler::new().set_optimization_level(2);
+            let compiler = mlua::Compiler::new().set_optimization_level(2);
 
-        lua.set_compiler(compiler);
+            lua.set_compiler(compiler);
 
-        pub struct TaskMgrFeedback {
-            pub limit: u64,
-            pub created: AtomicU64,
-        }
-
-        impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
-            fn on_thread_add(
-                &self,
-                _label: &str,
-                _creator: &mlua::Thread,
-                _thread: &mlua::Thread,
-            ) -> mlua::Result<()> {
-                if self
-                    .created
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                    >= self.limit
-                {
-                    return Err(mlua::Error::RuntimeError(
-                        "Thread create+spawn+add limit reached".to_string(),
-                    ));
-                }
-
-                Ok(())
+            pub struct TaskMgrFeedback {
+                pub limit: u64,
+                pub created: AtomicU64,
             }
 
-            fn on_response(
-                &self,
-                label: &str,
-                _tm: &mlua_scheduler::taskmgr::TaskManager,
-                _th: &mlua::Thread,
-                result: Option<&Result<mlua::MultiValue, mlua::Error>>,
-            ) {
-                if let Some(Err(e)) = result {
-                    eprintln!("Error [{}]: {}", label, e);
-                }
-            }
-        }
+            impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
+                fn on_thread_add(
+                    &self,
+                    _label: &str,
+                    _creator: &mlua::Thread,
+                    _thread: &mlua::Thread,
+                ) -> mlua::Result<()> {
+                    if self
+                        .created
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        >= self.limit
+                    {
+                        return Err(mlua::Error::RuntimeError(
+                            "Thread create+spawn+add limit reached".to_string(),
+                        ));
+                    }
 
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
-            lua.clone(),
-            mlua_scheduler::AsyncHandleMode::PollNTimes(1),
-            XRc::new(TaskMgrFeedback {
-                limit: 100000000,
-                created: AtomicU64::new(0),
-            }),
-        );
-
-        task_mgr.attach(&lua);
-
-        let task_mgr_ref = task_mgr.clone();
-        local.spawn_local(async move {
-            task_mgr_ref
-                .run(Duration::from_millis(1))
-                .await
-                .expect("Failed to run task manager");
-        });
-
-        lua.globals()
-            .set("_OS", OS.to_lowercase())
-            .expect("Failed to set _OS global");
-
-        lua.globals()
-            .set(
-                "_TEST_SYNC_WORK",
-                lua.create_async_function(|lua, n: u64| async move {
-                    //let task_mgr = taskmgr::get(&lua);
-                    //println!("Async work: {}", n);
-                    tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    //println!("Async work done: {}", n);
-
-                    let created_table = lua.create_table()?;
-                    created_table.set("test", "test")?;
-
-                    Ok(created_table)
-                })
-                .expect("Failed to create async function"),
-            )
-            .expect("Failed to set _OS global");
-
-        lua.globals()
-            .set(
-                "_TEST_ASYNC_WORK",
-                lua.create_scheduler_async_function(|_, n: u64| async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(n)).await;
                     Ok(())
-                })
-                .expect("Failed to create async function"),
-            )
-            .expect("Failed to set _OS global");
+                }
 
-        lua.globals()
-            .set(
-                "task",
-                mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
-            )
-            .expect("Failed to set task global");
+                fn on_response(
+                    &self,
+                    label: &str,
+                    _tm: &mlua_scheduler::taskmgr::TaskManager,
+                    _th: &mlua::Thread,
+                    result: Option<&Result<mlua::MultiValue, mlua::Error>>,
+                ) {
+                    if let Some(Err(e)) = result {
+                        eprintln!("Error [{}]: {}", label, e);
+                    }
+                }
+            }
 
-        mlua_scheduler::userdata::patch_coroutine_lib(&lua).expect("Failed to patch coroutine lib");
+            let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
+                lua.clone(),
+                XRc::new(TaskMgrFeedback {
+                    limit: 100000000,
+                    created: AtomicU64::new(0),
+                }),
+            );
 
-        lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
+            task_mgr.attach(&lua);
 
-        for path in cli.path {
-            spawn_script(lua.clone(), path)
-                .await
-                .expect("Failed to spawn script");
+            let task_mgr_ref = task_mgr.clone();
+            rt.spawn(async move {
+                task_mgr_ref
+                    .run(Duration::from_millis(1))
+                    .await
+                    .expect("Failed to run task manager");
+            });
 
-            task_mgr.wait_till_done(Duration::from_millis(100)).await;
-        }
+            lua.globals()
+                .set("_OS", OS.to_lowercase())
+                .expect("Failed to set _OS global");
 
-        println!("Stopping task manager");
+            lua.globals()
+                .set(
+                    "_TEST_SYNC_WORK",
+                    lua.create_async_function(|lua, n: u64| async move {
+                        //let task_mgr = taskmgr::get(&lua);
+                        //println!("Async work: {}", n);
+                        tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+                        //println!("Async work done: {}", n);
 
-        task_mgr.stop();
-        //std::process::exit(0);
-    });
+                        let created_table = lua.create_table()?;
+                        created_table.set("test", "test")?;
+
+                        Ok(created_table)
+                    })
+                    .expect("Failed to create async function"),
+                )
+                .expect("Failed to set _OS global");
+
+            lua.globals()
+                .set(
+                    "_TEST_ASYNC_WORK",
+                    lua.create_scheduler_async_function(|lua, n: u64| async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+                        Ok(lua.create_table()?)
+                    })
+                    .expect("Failed to create async function"),
+                )
+                .expect("Failed to set _OS global");
+
+            lua.globals()
+                .set(
+                    "task",
+                    mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
+                )
+                .expect("Failed to set task global");
+
+            mlua_scheduler::userdata::patch_coroutine_lib(&lua)
+                .expect("Failed to patch coroutine lib");
+
+            lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
+
+            for path in cli.path {
+                spawn_script(lua.clone(), path)
+                    .await
+                    .expect("Failed to spawn script");
+
+                task_mgr.wait_till_done(Duration::from_millis(100)).await;
+            }
+
+            println!("Stopping task manager");
+
+            task_mgr.stop();
+            //std::process::exit(0);
+        });
+    }
+
+    #[cfg(not(feature = "multithread"))]
+    {
+        assert!(!mlua_scheduler::IS_SEND);
+
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&rt, async {
+            let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+                .expect("Failed to create Lua");
+
+            #[cfg(feature = "ncg")]
+            lua.enable_jit(true);
+
+            let compiler = mlua::Compiler::new().set_optimization_level(2);
+
+            lua.set_compiler(compiler);
+
+            pub struct TaskMgrFeedback {
+                pub limit: u64,
+                pub created: AtomicU64,
+            }
+
+            impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
+                fn on_thread_add(
+                    &self,
+                    _label: &str,
+                    _creator: &mlua::Thread,
+                    _thread: &mlua::Thread,
+                ) -> mlua::Result<()> {
+                    if self
+                        .created
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        >= self.limit
+                    {
+                        return Err(mlua::Error::RuntimeError(
+                            "Thread create+spawn+add limit reached".to_string(),
+                        ));
+                    }
+
+                    Ok(())
+                }
+
+                fn on_response(
+                    &self,
+                    label: &str,
+                    _tm: &mlua_scheduler::taskmgr::TaskManager,
+                    _th: &mlua::Thread,
+                    result: Option<&Result<mlua::MultiValue, mlua::Error>>,
+                ) {
+                    if let Some(Err(e)) = result {
+                        eprintln!("Error [{}]: {}", label, e);
+                    }
+                }
+            }
+
+            let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
+                lua.clone(),
+                XRc::new(TaskMgrFeedback {
+                    limit: 100000000,
+                    created: AtomicU64::new(0),
+                }),
+            );
+
+            task_mgr.attach(&lua);
+
+            let task_mgr_ref = task_mgr.clone();
+            local.spawn_local(async move {
+                task_mgr_ref
+                    .run(Duration::from_millis(1))
+                    .await
+                    .expect("Failed to run task manager");
+            });
+
+            lua.globals()
+                .set("_OS", OS.to_lowercase())
+                .expect("Failed to set _OS global");
+
+            lua.globals()
+                .set(
+                    "_TEST_SYNC_WORK",
+                    lua.create_async_function(|lua, n: u64| async move {
+                        //let task_mgr = taskmgr::get(&lua);
+                        //println!("Async work: {}", n);
+                        tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+                        //println!("Async work done: {}", n);
+
+                        let created_table = lua.create_table()?;
+                        created_table.set("test", "test")?;
+
+                        Ok(created_table)
+                    })
+                    .expect("Failed to create async function"),
+                )
+                .expect("Failed to set _OS global");
+
+            lua.globals()
+                .set(
+                    "_TEST_ASYNC_WORK",
+                    lua.create_scheduler_async_function(|lua, n: u64| async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+                        Ok(lua.create_table()?)
+                    })
+                    .expect("Failed to create async function"),
+                )
+                .expect("Failed to set _OS global");
+
+            lua.globals()
+                .set(
+                    "task",
+                    mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
+                )
+                .expect("Failed to set task global");
+
+            mlua_scheduler::userdata::patch_coroutine_lib(&lua)
+                .expect("Failed to patch coroutine lib");
+
+            lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
+
+            for path in cli.path {
+                spawn_script(lua.clone(), path)
+                    .await
+                    .expect("Failed to spawn script");
+
+                task_mgr.wait_till_done(Duration::from_millis(100)).await;
+            }
+
+            println!("Stopping task manager");
+
+            task_mgr.stop();
+            //std::process::exit(0);
+        });
+    }
 }

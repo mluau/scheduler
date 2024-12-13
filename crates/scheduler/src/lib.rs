@@ -2,7 +2,13 @@ pub mod r#async;
 pub mod taskmgr;
 pub mod userdata;
 
-pub use taskmgr::{AsyncHandleMode, TaskManager};
+pub use taskmgr::TaskManager;
+
+#[cfg(feature = "send")]
+pub const IS_SEND: bool = true;
+
+#[cfg(not(feature = "send"))]
+pub const IS_SEND: bool = false;
 
 /// Spawns a function on the Lua runtime
 pub fn spawn_thread(lua: mlua::Lua, th: mlua::Thread, args: mlua::MultiValue) {

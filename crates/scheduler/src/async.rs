@@ -1,4 +1,8 @@
+use std::sync::atomic::Ordering;
+
 use mlua::prelude::*;
+
+use crate::taskmgr::ErrorUserdataValue;
 
 #[cfg(feature = "send")]
 pub trait MaybeSync: Sync {}
@@ -70,8 +74,7 @@ impl AsyncCallbackData {
     }
 
     /// Creates a lua function that can be called to call the async callback
-    pub fn create_lua_function(&self, lua: &Lua) -> LuaResult<LuaFunction> {
-        let self_ref = self.clone();
+    pub fn create_lua_function(self, lua: &Lua) -> LuaResult<LuaFunction> {
         let func = lua
             .load(
                 r#"
@@ -87,9 +90,87 @@ return callback
             )
             .call::<LuaFunction>(lua.create_function(
                 move |lua, (th, args): (LuaThread, LuaMultiValue)| {
-                    let scheduler = super::taskmgr::get(lua);
-                    scheduler.add_async_thread(th, args, self_ref.clone());
+                    let self_ref = self.clone();
+                    let mut callback = self_ref.callback;
+                    let lua_fut = lua.clone();
+                    let fut = async move { callback.call(lua_fut, args).await };
+
+                    let lua = lua.clone();
+
+                    let taskmgr = super::taskmgr::get(&lua);
+                    taskmgr.inner.pending_asyncs.fetch_add(1, Ordering::AcqRel);
+
+                    let inner = taskmgr.inner.clone();
+                    let mut async_executor = inner.async_task_executor.borrow_mut();
+
+                    let fut = async move {
+                        let res = fut.await;
+
+                        taskmgr.inner.feedback.on_response(
+                            "AsyncThread",
+                            &taskmgr,
+                            &th,
+                            Some(&res),
+                        );
+
+                        match res {
+                            Ok(res) => {
+                                let result =
+                                    taskmgr.resume_thread("AsyncThread", th.clone(), res).await;
+
+                                taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
+
+                                taskmgr.inner.feedback.on_response(
+                                    "AsyncThread.Resume",
+                                    &taskmgr,
+                                    &th,
+                                    result.as_ref(),
+                                );
+                            }
+                            Err(err) => {
+                                let mut result = mlua::MultiValue::new();
+                                result.push_back(
+                                    taskmgr
+                                        .inner
+                                        .lua
+                                        .app_data_ref::<ErrorUserdataValue>()
+                                        .unwrap()
+                                        .0
+                                        .clone(),
+                                );
+
+                                if let Ok(v) = err.to_string().into_lua(&lua) {
+                                    result.push_back(v);
+                                } else {
+                                    result.push_back(mlua::Value::Nil);
+                                }
+
+                                let result = taskmgr
+                                    .resume_thread("AsyncThread", th.clone(), result)
+                                    .await;
+
+                                taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
+
+                                taskmgr.inner.feedback.on_response(
+                                    "AsyncThread.Resume",
+                                    &taskmgr,
+                                    &th,
+                                    result.as_ref(),
+                                );
+                            }
+                        }
+                    };
+
+                    #[cfg(not(feature = "send"))]
+                    async_executor.spawn_local(fut);
+
+                    #[cfg(feature = "send")]
+                    async_executor.spawn(fut);
+
                     Ok(())
+
+                    //let scheduler = super::taskmgr::get(lua);
+                    //scheduler.add_async_thread(th, args, self_ref.clone());
                 },
             )?)?;
 

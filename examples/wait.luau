@@ -19,3 +19,9 @@ currTime = os.clock()
 task.wait(3)
 
 print("Time waited:", os.clock() - currTime)
+
+currTime = os.clock()
+
+_TEST_ASYNC_WORK(3)
+
+print("Time waited:", os.clock() - currTime)
