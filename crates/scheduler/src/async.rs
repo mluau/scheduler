@@ -98,7 +98,11 @@ return callback
                     let lua = lua.clone();
 
                     let taskmgr = super::taskmgr::get(&lua);
+
+                    #[cfg(feature = "send")]
                     taskmgr.inner.pending_asyncs.fetch_add(1, Ordering::AcqRel);
+                    #[cfg(not(feature = "send"))]
+                    taskmgr.inner.pending_asyncs.fetch_add(1, Ordering::Relaxed);
 
                     let inner = taskmgr.inner.clone();
                     let mut async_executor = inner.async_task_executor.borrow_mut();
@@ -118,7 +122,10 @@ return callback
                                 let result =
                                     taskmgr.resume_thread("AsyncThread", th.clone(), res).await;
 
+                                #[cfg(feature = "send")]
                                 taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
+                                #[cfg(not(feature = "send"))]
+                                taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::Relaxed);
 
                                 taskmgr.inner.feedback.on_response(
                                     "AsyncThread.Resume",
@@ -149,7 +156,10 @@ return callback
                                     .resume_thread("AsyncThread", th.clone(), result)
                                     .await;
 
+                                #[cfg(feature = "send")]
                                 taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
+                                #[cfg(not(feature = "send"))]
+                                taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::Relaxed);
 
                                 taskmgr.inner.feedback.on_response(
                                     "AsyncThread.Resume",
@@ -163,14 +173,10 @@ return callback
 
                     #[cfg(not(feature = "send"))]
                     async_executor.spawn_local(fut);
-
                     #[cfg(feature = "send")]
                     async_executor.spawn(fut);
 
                     Ok(())
-
-                    //let scheduler = super::taskmgr::get(lua);
-                    //scheduler.add_async_thread(th, args, self_ref.clone());
                 },
             )?)?;
 

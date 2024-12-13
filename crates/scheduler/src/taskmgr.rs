@@ -170,13 +170,19 @@ impl TaskManager {
     ) -> Option<mlua::Result<mlua::MultiValue>> {
         log::debug!("StartResumeThread: {}", label);
 
+        #[cfg(feature = "send")]
         self.inner.pending_resumes.fetch_add(1, Ordering::AcqRel);
+        #[cfg(not(feature = "send"))]
+        self.inner.pending_resumes.fetch_add(1, Ordering::Relaxed);
 
         let mut async_thread = thread.into_async::<mlua::MultiValue>(args);
 
         let next = async_thread.next().await;
 
+        #[cfg(feature = "send")]
         self.inner.pending_resumes.fetch_sub(1, Ordering::AcqRel);
+        #[cfg(not(feature = "send"))]
+        self.inner.pending_resumes.fetch_sub(1, Ordering::Relaxed);
 
         log::debug!("EndResumeThread {}", label);
 
