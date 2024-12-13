@@ -60,19 +60,24 @@ pub trait SchedulerFeedback {
     /// Contains both the creator thread and the thread that was added
     fn on_thread_add(
         &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()>;
+        _label: &str,
+        _creator: &mlua::Thread,
+        _thread: &mlua::Thread,
+    ) -> mlua::Result<()> {
+        // Do nothing, unless overridden
+        Ok(())
+    }
 
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
         &self,
-        label: &str,
-        tm: &TaskManager,
-        th: &mlua::Thread,
-        result: Option<&mlua::Result<mlua::MultiValue>>,
-    );
+        _label: &str,
+        _tm: &TaskManager,
+        _th: &mlua::Thread,
+        _result: Option<&mlua::Result<mlua::MultiValue>>,
+    ) {
+        // Do nothing, unless overridden
+    }
 }
 
 #[cfg(feature = "send")]
@@ -82,19 +87,24 @@ pub trait SchedulerFeedback: Send + Sync {
     /// Contains both the creator thread and the thread that was added
     fn on_thread_add(
         &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()>;
+        _label: &str,
+        _creator: &mlua::Thread,
+        _thread: &mlua::Thread,
+    ) -> mlua::Result<()> {
+        // Do nothing, unless overridden
+        Ok(())
+    }
 
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
         &self,
-        label: &str,
-        tm: &TaskManager,
-        th: &mlua::Thread,
-        result: Option<&mlua::Result<mlua::MultiValue>>,
-    );
+        _label: &str,
+        _tm: &TaskManager,
+        _th: &mlua::Thread,
+        _result: Option<&mlua::Result<mlua::MultiValue>>,
+    ) {
+        // Do nothing, unless overridden
+    }
 }
 
 /// Controls how the scheduler should handle async threads
@@ -161,6 +171,11 @@ impl TaskManager {
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
         self.inner.is_running.load(Ordering::Acquire)
+    }
+
+    /// Returns the feedback stored in the task manager
+    pub fn feedback(&self) -> XRc<dyn SchedulerFeedback> {
+        self.inner.feedback.clone()
     }
 
     /// Resumes a thread to next
