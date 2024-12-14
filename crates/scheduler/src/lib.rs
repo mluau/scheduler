@@ -1,7 +1,8 @@
-pub mod r#async;
+mod r#async;
 pub mod taskmgr;
 pub mod userdata;
 
+pub use r#async::LuaSchedulerAsync;
 pub use taskmgr::TaskManager;
 
 #[cfg(feature = "send")]
@@ -9,6 +10,15 @@ pub const IS_SEND: bool = true;
 
 #[cfg(not(feature = "send"))]
 pub const IS_SEND: bool = false;
+
+#[cfg(feature = "send")]
+pub trait MaybeSync: Sync {}
+#[cfg(feature = "send")]
+impl<T: Sync> MaybeSync for T {}
+#[cfg(not(feature = "send"))]
+pub trait MaybeSync {}
+#[cfg(not(feature = "send"))]
+impl<T> MaybeSync for T {}
 
 /// Spawns a function on the Lua runtime
 pub fn spawn_thread(lua: mlua::Lua, th: mlua::Thread, args: mlua::MultiValue) {

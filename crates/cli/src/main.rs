@@ -1,6 +1,6 @@
 use clap::Parser;
+use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
-use mlua_scheduler_ext::traits::LuaSchedulerExt;
 use smol::fs;
 use std::{env::consts::OS, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
 

@@ -13,6 +13,6 @@ clap = { version = "4.5.20", features = ["derive", "string"] }
 env_logger = "0.11"
 
 [features]
-default = ["ncg"]
+default = []
 ncg = ["mlua/luau-jit"]
 multithread = ["mlua_scheduler/send"]

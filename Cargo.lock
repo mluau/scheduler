@@ -653,7 +653,6 @@ dependencies = [
 name = "mlua_scheduler"
 version = "1.0.0"
 dependencies = [
- "async-trait",
  "flume",
  "futures-util",
  "indexmap",

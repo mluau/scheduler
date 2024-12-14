@@ -14,7 +14,8 @@ for i = 1, NUM_BATCHES do
 	local counter = 0
 	for j = 1, NUM_THREADS do
 		task.spawn(function()
-			task.wait(0.1)
+			--task.wait(0.1)
+			_TEST_ASYNC_WORK(0.1)
 			counter += 1
 			if counter == NUM_THREADS then
 				task.spawn(thread)
