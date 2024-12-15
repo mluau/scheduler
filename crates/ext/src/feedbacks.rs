@@ -275,6 +275,7 @@ impl SchedulerFeedback for ThreadResultTracker {
 
 /// An error tracker that saves errors about both the thread and threads it spawns
 /// to a queue
+#[derive(Clone)]
 pub struct ThreadErrorTracker {
     /// The thread tracker
     pub tracker: ThreadTracker,
