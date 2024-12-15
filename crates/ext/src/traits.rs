@@ -1,6 +1,5 @@
 use crate::Scheduler;
 use mlua::prelude::*;
-use mlua_scheduler::MaybeSync;
 
 /**
     Trait for any struct that can be turned into an [`LuaThread`]

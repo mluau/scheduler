@@ -17,7 +17,7 @@ where
             r#"
 local luacall = ...
 
-function callback(...)
+local function callback(...)
     luacall(coroutine.running(), ...)
     return coroutine.yield()
 end
