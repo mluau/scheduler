@@ -192,8 +192,8 @@ local function synchronize(...)
 end
 
 local function wait(time: number?): number
-    if time == nil then
-        time = 0
+    if time == nil or time < 0.1 then
+        time = 0.1 -- Avoid 100% CPU usage
     end
     table.__addWaiting(coroutine.running(), time)
     return coroutine.yield()

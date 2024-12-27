@@ -5,14 +5,5 @@ edition = "2021"
 
 [dependencies]
 mlua = { version = "0.10", features = ["luau", "async"] }
-smol = "2.0.2"
-indexmap = "2.6.0"
-flume = "0.11.1"
-# async-task = "4.7.1"
-# flume = "0.11.1"
-tokio = { version = "1", features = ["rt", "macros", "fs", "time", "sync"] }
 mlua_scheduler = { path = "../scheduler" }
 log = "0.4"
-scc = "2"
-futures-util = "0.3.31"
-async-trait = "0.1"
