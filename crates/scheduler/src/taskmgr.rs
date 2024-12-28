@@ -207,6 +207,23 @@ impl TaskManager {
         log::debug!("Added thread to waiting queue");
     }
 
+    /// Removes a waiting thread from the task manager returning the number of threads removed
+    pub fn remove_waiting_thread(&self, thread: &mlua::Thread) -> u64 {
+        let mut self_ref = self.inner.waiting_queue.borrow_mut();
+
+        let mut removed = 0;
+        self_ref.retain(|x| {
+            if x.thread.thread != *thread {
+                true
+            } else {
+                removed += 1;
+                false
+            }
+        });
+
+        removed
+    }
+
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
@@ -223,6 +240,23 @@ impl TaskManager {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_back(DeferredThread { thread: tinfo });
         log::debug!("Added deferred thread to queue");
+    }
+
+    /// Removes a deferred thread from the task manager returning the number of threads removed
+    pub fn remove_deferred_thread(&self, thread: &mlua::Thread) -> u64 {
+        let mut self_ref = self.inner.deferred_queue.borrow_mut();
+
+        let mut removed = 0;
+        self_ref.retain(|x| {
+            if x.thread.thread != *thread {
+                true
+            } else {
+                removed += 1;
+                false
+            }
+        });
+
+        removed
     }
 
     /// Runs the task manager

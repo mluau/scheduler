@@ -95,13 +95,20 @@ end"#,
     Ok(())
 }
 
-/// Returns an implementation of the `task` library as a table
-pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
+/// Returns the low-level Scheduler library of which task lib is based on
+pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     let scheduler_tab = lua.create_table()?;
 
+    // Adds a thread to the waiting queue
     scheduler_tab.set(
-        "__addWaiting",
+        "addWaiting",
         lua.create_function(|lua, (th, resume): (LuaThread, f64)| {
+            if resume < 0.05 {
+                return Err(LuaError::RuntimeError(
+                    "Cannot wait for less than 0.05 seconds".to_string(),
+                ));
+            }
+
             let taskmgr = super::taskmgr::get(lua);
 
             let curr_thread = lua.current_thread();
@@ -120,10 +127,17 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         })?,
     )?;
 
+    // Adds a thread to the waiting queue with arguments
     scheduler_tab.set(
-        "__addWaitingWithArgs",
+        "addWaitingWithArgs",
         lua.create_function(
             |lua, (f, resume, args): (LuaEither<LuaFunction, LuaThread>, f64, LuaMultiValue)| {
+                if resume < 0.05 {
+                    return Err(LuaError::RuntimeError(
+                        "Cannot wait for less than 0.05 seconds".to_string(),
+                    ));
+                }
+
                 let th = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
@@ -147,8 +161,19 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         )?,
     )?;
 
+    // Removes a thread from the waiting queue, returning the number of threads removed
     scheduler_tab.set(
-        "__addDeferred",
+        "removeWaiting",
+        lua.create_function(|lua, th: LuaThread| {
+            let taskmgr = super::taskmgr::get(lua);
+
+            Ok(taskmgr.remove_waiting_thread(&th))
+        })?,
+    )?;
+
+    // Adds a thread to the deferred queue at the front
+    scheduler_tab.set(
+        "addDeferredFront",
         lua.create_function(
             |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
@@ -170,17 +195,61 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         )?,
     )?;
 
+    // Adds a thread to the deferred queue at the back
+    scheduler_tab.set(
+        "addDeferredBack",
+        lua.create_function(
+            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+                let th = match f {
+                    LuaEither::Left(f) => lua.create_thread(f)?,
+                    LuaEither::Right(t) => t,
+                };
+
+                let taskmgr = super::taskmgr::get(lua);
+
+                taskmgr.inner.feedback.on_thread_add(
+                    "DeferredThread",
+                    &lua.current_thread(),
+                    &th,
+                )?;
+
+                taskmgr.add_deferred_thread_back(th.clone(), args);
+                Ok(th)
+            },
+        )?,
+    )?;
+
+    // Removes a thread from the deferred queue returning the number of threads removed
+    scheduler_tab.set(
+        "removeDeferred",
+        lua.create_function(|lua, th: LuaThread| {
+            let taskmgr = super::taskmgr::get(lua);
+
+            Ok(taskmgr.remove_deferred_thread(&th))
+        })?,
+    )?;
+
+    scheduler_tab.set_readonly(true);
+
+    Ok(scheduler_tab)
+}
+
+/// Returns an implementation of the `task` library as a table
+pub fn task_lib(lua: &Lua, scheduler_tab: LuaTable) -> LuaResult<LuaTable> {
     let table = lua
         .load(
             r#"
 local table = ...
 
 local function defer<T...>(task: Task<T...>, ...: T...): thread
-    return table.__addDeferred(task, ...)
+    return table.addDeferredFront(task, ...)
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    return table.__addWaitingWithArgs(task, time, ...)
+    if time < 0.05 then
+        time = 0.05 -- Avoid 100% CPU usage
+    end
+    return table.addWaitingWithArgs(task, time, ...)
 end
 
 local function desynchronize(...)
@@ -192,10 +261,10 @@ local function synchronize(...)
 end
 
 local function wait(time: number?): number
-    if time == nil or time < 0.1 then
-        time = 0.1 -- Avoid 100% CPU usage
+    if time == nil or time < 0.05 then
+        time = 0.05 -- Avoid 100% CPU usage
     end
-    table.__addWaiting(coroutine.running(), time)
+    table.addWaiting(coroutine.running(), time)
     return coroutine.yield()
 end
 

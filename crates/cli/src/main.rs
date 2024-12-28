@@ -282,10 +282,18 @@ fn main() {
                 )
                 .expect("Failed to set _OS global");
 
+            let scheduler_lib = mlua_scheduler::userdata::scheduler_lib(&lua)
+                .expect("Failed to create scheduler lib");
+
+            lua.globals()
+                .set("scheduler", scheduler_lib.clone())
+                .expect("Failed to set scheduler global");
+
             lua.globals()
                 .set(
                     "task",
-                    mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
+                    mlua_scheduler::userdata::task_lib(&lua, scheduler_lib)
+                        .expect("Failed to create table"),
                 )
                 .expect("Failed to set task global");
 
