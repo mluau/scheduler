@@ -94,7 +94,8 @@ impl Scheduler {
 
                 value = next;
 
-                if thread.status() == mlua::ThreadStatus::Finished {
+                let status = thread.status();
+                if status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error {
                     break;
                 }
             }
@@ -106,7 +107,8 @@ impl Scheduler {
 
                 value = next;
 
-                if thread.status() == mlua::ThreadStatus::Finished {
+                let status = thread.status();
+                if status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error {
                     break;
                 }
             }
