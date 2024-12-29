@@ -27,7 +27,7 @@ async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
 
     let scheduler = mlua_scheduler_ext::Scheduler::get(&lua);
     let output = scheduler
-        .spawn_thread_and_wait("SpawnScript", th, mlua::MultiValue::new(), None)
+        .spawn_thread_and_wait("SpawnScript", th, mlua::MultiValue::new())
         .await;
 
     println!("Output: {:?}", output);

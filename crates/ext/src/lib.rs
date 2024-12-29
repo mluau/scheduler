@@ -69,7 +69,6 @@ impl Scheduler {
         label: &str,
         thread: mlua::Thread,
         args: mlua::MultiValue,
-        timeout: Option<std::time::Duration>,
     ) -> Option<mlua::Result<mlua::MultiValue>> {
         let ter = self
             .task_manager
@@ -86,25 +85,15 @@ impl Scheduler {
 
         let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
 
-        if let Some(timeout) = timeout {
-            while let Ok(Some(next)) = tokio::time::timeout(timeout, rx.recv()).await {
-                log::debug!("Received value: {:?}", next);
-                value = next;
+        while let Some(next) = rx.recv().await {
+            log::debug!("Received value: {:?}", next);
+            value = next;
 
-                let status = thread.status();
-                if status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error {
-                    break;
-                }
-            }
-        } else {
-            while let Some(next) = rx.recv().await {
-                log::debug!("Received value: {:?}", next);
-                value = next;
-
-                let status = thread.status();
-                if status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error {
-                    break;
-                }
+            let status = thread.status();
+            if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+                && rx.is_empty()
+            {
+                break;
             }
         }
 
