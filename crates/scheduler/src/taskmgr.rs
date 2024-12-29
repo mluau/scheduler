@@ -143,12 +143,14 @@ impl TaskManager {
     }
 
     /// Attaches the task manager to the lua state
-    pub fn attach(&self, lua: &mlua::Lua) {
-        lua.set_app_data(self.clone());
+    pub fn attach(&self) {
+        self.inner.lua.set_app_data(self.clone());
 
         // Also save error userdata
-        let error_userdata = ErrorUserdata {}.into_lua(lua).unwrap();
-        lua.set_app_data(ErrorUserdataValue(error_userdata));
+        let error_userdata = ErrorUserdata {}.into_lua(&self.inner.lua).unwrap();
+        self.inner
+            .lua
+            .set_app_data(ErrorUserdataValue(error_userdata));
     }
 
     /// Returns whether the task manager is running
@@ -187,6 +189,20 @@ impl TaskManager {
         log::debug!("EndResumeThread {}", label);
 
         next
+    }
+
+    /// Resumes a thread to next and sends feedback through the scheduler feedback
+    pub async fn resume_thread_and_send_feedback(
+        &self,
+        label: &str,
+        thread: mlua::Thread,
+        args: mlua::MultiValue,
+    ) -> Option<mlua::Result<mlua::MultiValue>> {
+        let result = self.resume_thread(label, thread.clone(), args).await;
+        self.inner
+            .feedback
+            .on_response(label, self, &thread, result.as_ref());
+        result
     }
 
     /// Adds a waiting thread to the task manager

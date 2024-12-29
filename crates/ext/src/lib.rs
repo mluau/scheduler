@@ -27,9 +27,16 @@ impl Scheduler {
     /// Attaches the scheduler to the Lua state
     ///
     /// Note: this method also attaches the inner task manager itself
-    pub fn attach(&self, lua: &mlua::Lua) {
-        lua.set_app_data(self.clone());
-        self.task_manager.attach(lua); // Attach the task manager on the scheduler to the lua state
+    pub fn attach(&self) {
+        self.task_manager.inner.lua.set_app_data(self.clone());
+        self.task_manager.attach(); // Attach the task manager on the scheduler to the lua state
+    }
+
+    /// Returns the scheduler given a lua
+    pub fn get(lua: &mlua::Lua) -> Self {
+        lua.app_data_ref::<Self>()
+            .expect("No scheduler attached")
+            .clone()
     }
 }
 
@@ -45,6 +52,67 @@ impl Scheduler {
     /// Returns the currently set exit code
     pub fn exit_code(&self) -> u8 {
         self.exit_code.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Spawns a thread, discarding its output entirely
+    pub async fn spawn_thread(&self, label: &str, thread: mlua::Thread, args: mlua::MultiValue) {
+        self.task_manager
+            .resume_thread_and_send_feedback(label, thread, args)
+            .await;
+    }
+
+    /// Spawns a thread and then proceeds to get its output properly
+    ///
+    /// This requires ThreadResultTracker to be attached to the scheduler
+    pub async fn spawn_thread_and_wait(
+        &self,
+        label: &str,
+        thread: mlua::Thread,
+        args: mlua::MultiValue,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<mlua::Result<mlua::MultiValue>> {
+        let ter = self
+            .task_manager
+            .inner
+            .lua
+            .app_data_ref::<feedbacks::ThreadResultTracker>()
+            .expect("No ThreadResultTracker attached");
+
+        let mut rx = ter.track_thread(&thread);
+
+        self.task_manager
+            .resume_thread_and_send_feedback(label, thread.clone(), args)
+            .await;
+
+        let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
+
+        if let Some(timeout) = timeout {
+            while let Ok(Some(next)) = tokio::time::timeout(timeout, rx.recv()).await {
+                if next.is_none() {
+                    break;
+                }
+
+                value = next;
+
+                if thread.status() == mlua::ThreadStatus::Finished {
+                    break;
+                }
+            }
+        } else {
+            while let Some(next) = rx.recv().await {
+                if next.is_none() {
+                    break;
+                }
+
+                value = next;
+
+                if thread.status() == mlua::ThreadStatus::Finished {
+                    break;
+                }
+            }
+        }
+
+        value
     }
 
     /// Exits the scheduler with the given exit code

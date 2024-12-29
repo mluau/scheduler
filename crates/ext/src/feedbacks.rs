@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mlua_scheduler::{taskmgr::SchedulerFeedback, XRc, XRefCell};
+use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell};
 
 /// A multiple scheduler feedback that can be used to combine multiple scheduler feedbacks
 pub struct MultipleSchedulerFeedback {
@@ -36,7 +36,7 @@ impl SchedulerFeedback for MultipleSchedulerFeedback {
     fn on_response(
         &self,
         label: &str,
-        tm: &mlua_scheduler::taskmgr::TaskManager,
+        tm: &TaskManager,
         th: &mlua::Thread,
         result: Option<&Result<mlua::MultiValue, mlua::Error>>,
     ) {
@@ -195,17 +195,25 @@ impl SchedulerFeedback for ThreadTracker {
     fn on_response(
         &self,
         _label: &str,
-        _tm: &mlua_scheduler::taskmgr::TaskManager,
+        _tm: &TaskManager,
         _th: &mlua::Thread,
         _result: Option<&Result<mlua::MultiValue, mlua::Error>>,
     ) {
     }
 }
 
-/// Tracks the results of threads
+/// Tracks thread results and uses a channel to send them back out
 #[derive(Clone)]
 pub struct ThreadResultTracker {
-    results: XRc<XRefCell<HashMap<String, Result<mlua::MultiValue, mlua::Error>>>>,
+    #[allow(clippy::type_complexity)]
+    pub returns: XRc<
+        XRefCell<
+            HashMap<
+                String,
+                tokio::sync::mpsc::UnboundedSender<Option<mlua::Result<mlua::MultiValue>>>,
+            >,
+        >,
+    >,
 }
 
 impl Default for ThreadResultTracker {
@@ -215,46 +223,26 @@ impl Default for ThreadResultTracker {
 }
 
 impl ThreadResultTracker {
-    /// Creates a new thread result tracker
+    /// Creates a new thread tracker
     pub fn new() -> Self {
         Self {
-            results: XRc::new(XRefCell::new(HashMap::new())),
+            returns: XRc::new(XRefCell::new(HashMap::new())),
         }
     }
 
-    /// Adds a new result to the tracker
-    pub fn add_result(&self, thread: mlua::Thread, result: Result<mlua::MultiValue, mlua::Error>) {
-        self.results
-            .borrow_mut()
-            .insert(format!("{:?}", thread.to_pointer()), result);
+    fn thread_string(&self, th: &mlua::Thread) -> String {
+        format!("{:?}", th.to_pointer())
     }
 
-    /// Removes a result from the tracker
-    pub fn remove_result(&self, thread: mlua::Thread) {
-        self.results
-            .borrow_mut()
-            .remove(&format!("{:?}", thread.to_pointer()));
-    }
-
-    /// Adds a new result to the tracker
-    pub fn add_result_str(&self, thread: String, result: Result<mlua::MultiValue, mlua::Error>) {
-        self.results.borrow_mut().insert(thread, result);
-    }
-
-    /// Removes a result from the tracker
-    pub fn remove_result_str(&self, thread: &str) {
-        self.results.borrow_mut().remove(thread);
-    }
-
-    /// Gets the result of a thread
-    pub fn get_result(
+    /// Track a threads result
+    pub fn track_thread(
         &self,
-        thread: &mlua::Thread,
-    ) -> Option<Result<mlua::MultiValue, mlua::Error>> {
-        self.results
-            .borrow()
-            .get(&format!("{:?}", thread.to_pointer()))
-            .cloned()
+        th: &mlua::Thread,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<Option<mlua::Result<mlua::MultiValue>>> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.returns.borrow_mut().insert(self.thread_string(th), tx);
+
+        rx
     }
 }
 
@@ -262,13 +250,16 @@ impl SchedulerFeedback for ThreadResultTracker {
     fn on_response(
         &self,
         _label: &str,
-        _tm: &mlua_scheduler::taskmgr::TaskManager,
+        _tm: &TaskManager,
         th: &mlua::Thread,
-        result: Option<&Result<mlua::MultiValue, mlua::Error>>,
+        result: Option<&mlua::Result<mlua::MultiValue>>,
     ) {
-        // Replace the result if it exists
-        if let Some(result) = result {
-            self.add_result(th.clone(), result.clone());
+        if let Some(tx) = self.returns.borrow_mut().get(&self.thread_string(th)) {
+            let _ = tx.send(match result {
+                Some(Ok(mv)) => Some(Ok(mv.clone())),
+                Some(Err(e)) => Some(Err(e.clone())),
+                None => None,
+            });
         }
     }
 }

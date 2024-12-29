@@ -7,3 +7,4 @@ edition = "2021"
 mlua = { version = "0.10", features = ["luau", "async"] }
 mlua_scheduler = { path = "../scheduler" }
 log = "0.4"
+tokio = { version = "1", features = ["rt", "sync"] }

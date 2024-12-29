@@ -9,4 +9,6 @@ while flag == 0 do
     task.wait(0.1)
 end
 
+print("After 10 done")
+
 return 100
