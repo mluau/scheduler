@@ -88,10 +88,6 @@ impl Scheduler {
 
         if let Some(timeout) = timeout {
             while let Ok(Some(next)) = tokio::time::timeout(timeout, rx.recv()).await {
-                if next.is_none() {
-                    break;
-                }
-
                 value = next;
 
                 let status = thread.status();
@@ -101,10 +97,6 @@ impl Scheduler {
             }
         } else {
             while let Some(next) = rx.recv().await {
-                if next.is_none() {
-                    break;
-                }
-
                 value = next;
 
                 let status = thread.status();
