@@ -25,7 +25,10 @@ async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
     let th = lua.create_thread(f)?;
     //println!("Spawning thread: {:?}", th.to_pointer());
 
-    mlua_scheduler::spawn_thread(lua, th.clone(), mlua::MultiValue::new());
+    let task_mgr = mlua_scheduler::taskmgr::get(&lua);
+    task_mgr
+        .resume_thread("SpawnScript", th, mlua::MultiValue::new())
+        .await;
 
     //println!("Spawned thread: {:?}", th.to_pointer());
     Ok(())
