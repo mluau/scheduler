@@ -100,7 +100,7 @@ pub trait SchedulerFeedback: Send + Sync {
         _label: &str,
         _tm: &TaskManager,
         _th: &mlua::Thread,
-        _result: Option<&mlua::Result<mlua::MultiValue>>,
+        _result: Option<mlua::Result<mlua::MultiValue>>,
     ) {
         // Do nothing, unless overridden
     }

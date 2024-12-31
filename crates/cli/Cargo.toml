@@ -15,4 +15,4 @@ env_logger = "0.11"
 [features]
 default = []
 ncg = ["mlua/luau-jit"]
-multithread = ["mlua_scheduler/send"]
+multithread = ["mlua_scheduler/send", "mlua_scheduler_ext/multithread"]
