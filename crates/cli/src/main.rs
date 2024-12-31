@@ -105,8 +105,15 @@ fn main() {
 
         lua.set_app_data(thread_tracker.clone());
 
-        let task_mgr =
-            mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(thread_tracker));
+        let chain = mlua_scheduler_ext::feedbacks::ChainFeedback::new(
+            thread_tracker,
+            TaskMgrFeedback {
+                limit: 500000000,
+                created: AtomicU64::new(0),
+            },
+        );
+
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(chain));
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 

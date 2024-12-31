@@ -2,6 +2,44 @@ use std::collections::HashMap;
 
 use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell};
 
+// Chain 2 feedbacks together
+pub struct ChainFeedback<T: SchedulerFeedback, U: SchedulerFeedback>(pub T, pub U);
+
+impl<T: SchedulerFeedback, U: SchedulerFeedback> ChainFeedback<T, U> {
+    /// Creates a new chain feedback
+    pub fn new(t: T, u: U) -> Self {
+        Self(t, u)
+    }
+
+    /// Creates a new chain feedback by chaining with another feedback
+    pub fn chain<V: SchedulerFeedback>(self, v: V) -> ChainFeedback<Self, V> {
+        ChainFeedback(self, v)
+    }
+}
+
+impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeedback<T, U> {
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()> {
+        self.0.on_thread_add(label, creator, thread)?;
+        self.1.on_thread_add(label, creator, thread)
+    }
+
+    fn on_response(
+        &self,
+        label: &str,
+        tm: &TaskManager,
+        th: &mlua::Thread,
+        result: Option<Result<mlua::MultiValue, mlua::Error>>,
+    ) {
+        self.0.on_response(label, tm, th, result.clone());
+        self.1.on_response(label, tm, th, result);
+    }
+}
+
 #[cfg(not(feature = "multithread"))]
 #[derive(Hash, Eq, PartialEq)]
 pub struct ThreadPtr(*const std::ffi::c_void);
