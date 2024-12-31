@@ -41,7 +41,7 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
             taskmgr
                 .inner
                 .feedback
-                .on_response("CoroutineResume", &taskmgr, &th, res.as_ref());
+                .on_response("CoroutineResume", &taskmgr, &th, res.clone());
 
             match res {
                 Some(Ok(res)) => (true, res).into_lua_multi(&lua),
@@ -308,7 +308,7 @@ return {
                 taskmgr
                     .inner
                     .feedback
-                    .on_response("TaskSpawn", &taskmgr, &t, result.as_ref());
+                    .on_response("TaskSpawn", &taskmgr, &t, result);
 
                 Ok(t)
             },

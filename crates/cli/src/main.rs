@@ -93,7 +93,7 @@ fn main() {
                 label: &str,
                 _tm: &mlua_scheduler::taskmgr::TaskManager,
                 _th: &mlua::Thread,
-                result: Option<&Result<mlua::MultiValue, mlua::Error>>,
+                result: Option<Result<mlua::MultiValue, mlua::Error>>,
             ) {
                 if let Some(Err(e)) = result {
                     eprintln!("Error [{}]: {}", label, e);
@@ -101,20 +101,12 @@ fn main() {
             }
         }
 
-        let thread_result_tracker = mlua_scheduler_ext::feedbacks::ThreadResultTracker::new();
+        let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
 
-        lua.set_app_data(thread_result_tracker.clone());
-
-        let multi_feedback = mlua_scheduler_ext::feedbacks::MultipleSchedulerFeedback::new(vec![
-            Box::new(TaskMgrFeedback {
-                limit: 100000000,
-                created: AtomicU64::new(0),
-            }),
-            Box::new(thread_result_tracker),
-        ]);
+        lua.set_app_data(thread_tracker.clone());
 
         let task_mgr =
-            mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(multi_feedback));
+            mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(thread_tracker));
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 

@@ -63,7 +63,7 @@ impl Scheduler {
 
     /// Spawns a thread and then proceeds to get its output properly
     ///
-    /// This requires ThreadResultTracker to be attached to the scheduler
+    /// This requires ThreadTracker to be attached to the scheduler
     pub async fn spawn_thread_and_wait(
         &self,
         label: &str,
@@ -74,7 +74,7 @@ impl Scheduler {
             .task_manager
             .inner
             .lua
-            .app_data_ref::<feedbacks::ThreadResultTracker>()
+            .app_data_ref::<feedbacks::ThreadTracker>()
             .expect("No ThreadResultTracker attached");
 
         let mut rx = ter.track_thread(&thread);

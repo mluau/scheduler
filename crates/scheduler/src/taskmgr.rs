@@ -73,7 +73,7 @@ pub trait SchedulerFeedback {
         _label: &str,
         _tm: &TaskManager,
         _th: &mlua::Thread,
-        _result: Option<&mlua::Result<mlua::MultiValue>>,
+        _result: Option<mlua::Result<mlua::MultiValue>>,
     ) {
         // Do nothing, unless overridden
     }
@@ -197,12 +197,11 @@ impl TaskManager {
         label: &str,
         thread: mlua::Thread,
         args: mlua::MultiValue,
-    ) -> Option<mlua::Result<mlua::MultiValue>> {
+    ) {
         let result = self.resume_thread(label, thread.clone(), args).await;
         self.inner
             .feedback
-            .on_response(label, self, &thread, result.as_ref());
-        result
+            .on_response(label, self, &thread, result);
     }
 
     /// Adds a waiting thread to the task manager
@@ -372,7 +371,7 @@ impl TaskManager {
                     "DeferredThread",
                     self,
                     &thread_info.thread.thread,
-                    result.as_ref(),
+                    result,
                 );
             }
         }
@@ -417,7 +416,7 @@ impl TaskManager {
                         "WaitingThread",
                         self,
                         &thread_info.thread.thread,
-                        result.as_ref(),
+                        result,
                     );
 
                     None

@@ -55,11 +55,6 @@ return callback
                 let fut = async move {
                     let res = fut.await;
 
-                    taskmgr
-                        .inner
-                        .feedback
-                        .on_response("AsyncThread", &taskmgr, &th, Some(&res));
-
                     match res {
                         Ok(res) => {
                             let result =
@@ -71,10 +66,10 @@ return callback
                             taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::Relaxed);
 
                             taskmgr.inner.feedback.on_response(
-                                "AsyncThread.Resume",
+                                "AsyncThread",
                                 &taskmgr,
                                 &th,
-                                result.as_ref(),
+                                result,
                             );
                         }
                         Err(err) => {
@@ -108,7 +103,7 @@ return callback
                                 "AsyncThread.Resume",
                                 &taskmgr,
                                 &th,
-                                result.as_ref(),
+                                result,
                             );
                         }
                     }

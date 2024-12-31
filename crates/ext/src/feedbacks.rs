@@ -2,56 +2,21 @@ use std::collections::HashMap;
 
 use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell};
 
-/// A multiple scheduler feedback that can be used to combine multiple scheduler feedbacks
-pub struct MultipleSchedulerFeedback {
-    feedbacks: Vec<Box<dyn SchedulerFeedback>>,
-}
-
-impl MultipleSchedulerFeedback {
-    /// Creates a new multiple scheduler feedback
-    pub fn new(feedbacks: Vec<Box<dyn SchedulerFeedback>>) -> Self {
-        Self { feedbacks }
-    }
-
-    /// Adds a new feedback to the multiple scheduler feedback
-    pub fn add_feedback(&mut self, feedback: Box<dyn SchedulerFeedback>) {
-        self.feedbacks.push(feedback);
-    }
-}
-
-impl SchedulerFeedback for MultipleSchedulerFeedback {
-    fn on_thread_add(
-        &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        for feedback in &self.feedbacks {
-            feedback.on_thread_add(label, creator, thread)?;
-        }
-
-        Ok(())
-    }
-
-    fn on_response(
-        &self,
-        label: &str,
-        tm: &TaskManager,
-        th: &mlua::Thread,
-        result: Option<&Result<mlua::MultiValue, mlua::Error>>,
-    ) {
-        for feedback in &self.feedbacks {
-            feedback.on_response(label, tm, th, result);
-        }
-    }
-}
-
 /// Tracks the threads known to the scheduler to the thread which initiated them
 #[derive(Clone)]
 pub struct ThreadTracker {
-    threads_known: XRc<XRefCell<HashMap<String, String>>>,
-    thread_hashmap: XRc<XRefCell<HashMap<String, mlua::Thread>>>,
-    thread_metadata: XRc<XRefCell<HashMap<String, String>>>,
+    threads_known: XRc<XRefCell<HashMap<*const std::ffi::c_void, *const std::ffi::c_void>>>,
+    thread_hashmap: XRc<XRefCell<HashMap<*const std::ffi::c_void, mlua::Thread>>>,
+    thread_metadata: XRc<XRefCell<HashMap<*const std::ffi::c_void, String>>>,
+    #[allow(clippy::type_complexity)]
+    pub returns: XRc<
+        XRefCell<
+            HashMap<
+                *const std::ffi::c_void,
+                tokio::sync::mpsc::UnboundedSender<Option<mlua::Result<mlua::MultiValue>>>,
+            >,
+        >,
+    >,
 }
 
 impl Default for ThreadTracker {
@@ -67,6 +32,7 @@ impl ThreadTracker {
             threads_known: XRc::new(XRefCell::new(HashMap::new())),
             thread_hashmap: XRc::new(XRefCell::new(HashMap::new())),
             thread_metadata: XRc::new(XRefCell::new(HashMap::new())),
+            returns: XRc::new(XRefCell::new(HashMap::new())),
         }
     }
 
@@ -74,14 +40,14 @@ impl ThreadTracker {
     pub fn set_metadata(&self, thread: mlua::Thread, metadata: String) {
         self.thread_metadata
             .borrow_mut()
-            .insert(format!("{:?}", thread.to_pointer()), metadata);
+            .insert(thread.to_pointer(), metadata);
     }
 
     /// Gets metadata for a thread
     pub fn get_metadata(&self, thread: &mlua::Thread) -> Option<String> {
         self.thread_metadata
             .borrow()
-            .get(&format!("{:?}", thread.to_pointer()))
+            .get(&thread.to_pointer())
             .cloned()
     }
 
@@ -98,25 +64,20 @@ impl ThreadTracker {
 
     /// Adds a new thread to the tracker
     pub fn add_thread(&self, thread: mlua::Thread, initiator: mlua::Thread) {
-        self.threads_known.borrow_mut().insert(
-            format!("{:?}", thread.to_pointer()),
-            format!("{:?}", initiator.to_pointer()),
-        );
+        let ptr = thread.to_pointer();
+        let initiator_ptr = initiator.to_pointer();
+        self.threads_known.borrow_mut().insert(ptr, initiator_ptr);
+
+        self.thread_hashmap.borrow_mut().insert(ptr, thread);
 
         self.thread_hashmap
             .borrow_mut()
-            .insert(format!("{:?}", thread.to_pointer()), thread);
-
-        self.thread_hashmap
-            .borrow_mut()
-            .insert(format!("{:?}", initiator.to_pointer()), initiator);
+            .insert(initiator_ptr, initiator);
     }
 
     /// Removes a thread from the tracker
     pub fn remove_thread(&self, thread: mlua::Thread) {
-        self.threads_known
-            .borrow_mut()
-            .remove(&format!("{:?}", thread.to_pointer()));
+        self.threads_known.borrow_mut().remove(&thread.to_pointer());
     }
 
     /// Gets the initiator of a thread
@@ -124,7 +85,7 @@ impl ThreadTracker {
         let thread_ptr = self
             .threads_known
             .borrow()
-            .get(&format!("{:?}", thread.to_pointer()))
+            .get(&thread.to_pointer())
             .cloned()?;
 
         self.thread_hashmap.borrow().get(&thread_ptr).cloned()
@@ -134,7 +95,7 @@ impl ThreadTracker {
     ///
     /// A related thread entry whose thread or its initiator one that is either present in key or value of the hashmap.
     pub fn get_related_threads(&self, thread: &mlua::Thread) -> Vec<mlua::Thread> {
-        let thread_ptr = format!("{:?}", thread.to_pointer());
+        let thread_ptr = thread.to_pointer();
 
         let mut related_threads = Vec::new();
 
@@ -152,7 +113,7 @@ impl ThreadTracker {
 
         // Check for initiator
         if let Some(initiator) = self.get_initiator(thread) {
-            let initiator_ptr = format!("{:?}", initiator.to_pointer());
+            let initiator_ptr = initiator.to_pointer();
 
             for (key, value) in self.threads_known.borrow().iter() {
                 if key == &initiator_ptr {
@@ -168,6 +129,17 @@ impl ThreadTracker {
         }
 
         related_threads
+    }
+
+    /// Track a threads result
+    pub fn track_thread(
+        &self,
+        th: &mlua::Thread,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<Option<mlua::Result<mlua::MultiValue>>> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.returns.borrow_mut().insert(th.to_pointer(), tx);
+
+        rx
     }
 }
 
@@ -196,68 +168,13 @@ impl SchedulerFeedback for ThreadTracker {
         &self,
         _label: &str,
         _tm: &TaskManager,
-        _th: &mlua::Thread,
-        _result: Option<&Result<mlua::MultiValue, mlua::Error>>,
-    ) {
-    }
-}
-
-/// Tracks thread results and uses a channel to send them back out
-#[derive(Clone)]
-pub struct ThreadResultTracker {
-    #[allow(clippy::type_complexity)]
-    pub returns: XRc<
-        XRefCell<
-            HashMap<
-                String,
-                tokio::sync::mpsc::UnboundedSender<Option<mlua::Result<mlua::MultiValue>>>,
-            >,
-        >,
-    >,
-}
-
-impl Default for ThreadResultTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ThreadResultTracker {
-    /// Creates a new thread tracker
-    pub fn new() -> Self {
-        Self {
-            returns: XRc::new(XRefCell::new(HashMap::new())),
-        }
-    }
-
-    fn thread_string(&self, th: &mlua::Thread) -> String {
-        format!("{:?}", th.to_pointer())
-    }
-
-    /// Track a threads result
-    pub fn track_thread(
-        &self,
         th: &mlua::Thread,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<Option<mlua::Result<mlua::MultiValue>>> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.returns.borrow_mut().insert(self.thread_string(th), tx);
-
-        rx
-    }
-}
-
-impl SchedulerFeedback for ThreadResultTracker {
-    fn on_response(
-        &self,
-        _label: &str,
-        _tm: &TaskManager,
-        th: &mlua::Thread,
-        result: Option<&mlua::Result<mlua::MultiValue>>,
+        result: Option<Result<mlua::MultiValue, mlua::Error>>,
     ) {
-        if let Some(tx) = self.returns.borrow_mut().get(&self.thread_string(th)) {
+        if let Some(tx) = self.returns.borrow_mut().get(&th.to_pointer()) {
             let _ = tx.send(match result {
-                Some(Ok(mv)) => Some(Ok(mv.clone())),
-                Some(Err(e)) => Some(Err(e.clone())),
+                Some(Ok(mv)) => Some(Ok(mv)),
+                Some(Err(e)) => Some(Err(e)),
                 None => None,
             });
         }
