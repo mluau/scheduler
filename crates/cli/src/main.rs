@@ -1,4 +1,5 @@
 use clap::Parser;
+use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
 use smol::fs;
@@ -16,10 +17,11 @@ struct Cli {
     path: Vec<PathBuf>,
 }
 
-async fn spawn_script(lua: mlua::Lua, path: PathBuf) -> mlua::Result<()> {
+async fn spawn_script(lua: mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Result<()> {
     let f = lua
         .load(fs::read_to_string(&path).await?)
         .set_name(fs::canonicalize(&path).await?.to_string_lossy())
+        .set_environment(g)
         .into_function()?;
 
     let th = lua.create_thread(f)?;
@@ -179,8 +181,49 @@ fn main() {
 
         lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
 
+        // Setup the global table using a metatable
+        //
+        // SAFETY: This works because the global table will not change in the VM
+        let global_mt = lua.create_table().expect("Failed to create table");
+        let global_tab = lua.create_table().expect("Failed to create table");
+
+        // Proxy reads to globals if key is in globals, otherwise to the table
+        global_mt
+            .set("__index", lua.globals())
+            .expect("Failed to set __index");
+        global_tab
+            .set("_G", global_tab.clone())
+            .expect("Failed to set _G");
+        global_tab
+            .set("__stack", global_tab.clone())
+            .expect("Failed to set __stack");
+
+        // Provies writes
+        // Forward to _G if key is in globals, otherwise to the table
+        let globals_ref = lua.globals();
+        global_mt
+            .set(
+                "__newindex",
+                lua.create_function(
+                    move |_lua, (tab, key, value): (LuaTable, LuaValue, LuaValue)| {
+                        let v = globals_ref.get::<LuaValue>(key.clone())?;
+
+                        if !v.is_nil() {
+                            globals_ref.set(key, value)
+                        } else {
+                            tab.raw_set(key, value)
+                        }
+                    },
+                )
+                .expect("Failed to create function"),
+            )
+            .expect("Failed to set __newindex");
+
+        // Set __index on global_tab to point to _G
+        global_tab.set_metatable(Some(global_mt));
+
         for path in cli.path {
-            spawn_script(lua.clone(), path)
+            spawn_script(lua.clone(), path, global_tab.clone())
                 .await
                 .expect("Failed to spawn script");
 
