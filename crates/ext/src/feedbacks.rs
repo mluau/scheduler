@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell};
 
-// Chain 2 feedbacks together
+/// Chain 2 feedbacks together
 pub struct ChainFeedback<T: SchedulerFeedback, U: SchedulerFeedback>(pub T, pub U);
 
 impl<T: SchedulerFeedback, U: SchedulerFeedback> ChainFeedback<T, U> {
@@ -37,6 +37,68 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
     ) {
         self.0.on_response(label, tm, th, result.clone());
         self.1.on_response(label, tm, th, result);
+    }
+}
+
+/// Not all scheduler feedbacks need both on_thread_add and on_response
+///
+/// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
+/// can be more efficient
+#[cfg(not(feature = "multithread"))]
+pub trait ThreadAddMiddleware {
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()>;
+}
+
+/// Not all scheduler feedbacks need both on_thread_add and on_response
+///
+/// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
+/// can be more efficient
+#[cfg(feature = "multithread")]
+pub trait ThreadAddMiddleware: Send + Sync {
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()>;
+}
+
+/// Attaches a ThreadAddMiddleware to a SchedulerFeedback
+pub struct ThreadAddMiddlewareFeedback<T: SchedulerFeedback, U: ThreadAddMiddleware>(pub T, pub U);
+
+impl<T: SchedulerFeedback, U: ThreadAddMiddleware> ThreadAddMiddlewareFeedback<T, U> {
+    /// Creates a new ThreadAddMiddlewareFeedback
+    pub fn new(t: T, u: U) -> Self {
+        Self(t, u)
+    }
+}
+
+impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
+    for ThreadAddMiddlewareFeedback<T, U>
+{
+    fn on_thread_add(
+        &self,
+        label: &str,
+        creator: &mlua::Thread,
+        thread: &mlua::Thread,
+    ) -> mlua::Result<()> {
+        self.0.on_thread_add(label, creator, thread)?;
+        self.1.on_thread_add(label, creator, thread)
+    }
+
+    fn on_response(
+        &self,
+        label: &str,
+        tm: &TaskManager,
+        th: &mlua::Thread,
+        result: Option<Result<mlua::MultiValue, mlua::Error>>,
+    ) {
+        self.0.on_response(label, tm, th, result);
     }
 }
 
@@ -126,5 +188,50 @@ impl SchedulerFeedback for ThreadTracker {
                 None => None,
             });
         }
+    }
+}
+
+/// A thread limit middleware
+pub struct ThreadLimitMiddleware {
+    limit: XRefCell<usize>,
+    created: XRefCell<usize>,
+}
+
+impl ThreadLimitMiddleware {
+    /// Creates a new thread limit middleware
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit: XRefCell::new(limit),
+            created: XRefCell::new(0),
+        }
+    }
+
+    /// Sets the thread limit
+    ///
+    /// Panics if called concurrently
+    pub fn set_limit(&self, limit: usize) {
+        let mut limit_g = self.limit.borrow_mut();
+        *limit_g = limit;
+    }
+}
+
+impl ThreadAddMiddleware for ThreadLimitMiddleware {
+    fn on_thread_add(
+        &self,
+        _label: &str,
+        _creator: &mlua::Thread,
+        _thread: &mlua::Thread,
+    ) -> mlua::Result<()> {
+        let limit = *self.limit.borrow();
+        let mut created = self.created.borrow_mut();
+        *created += 1;
+
+        if *created > limit {
+            return Err(mlua::Error::RuntimeError(
+                "Thread limit reached".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 }
