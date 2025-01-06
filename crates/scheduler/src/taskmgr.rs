@@ -16,12 +16,12 @@ pub struct WaitingThread {
     thread: mlua::Thread,
     op: WaitOp,
     start: std::time::Instant,
-    duration: std::time::Duration,
+    wake_at: std::time::Instant,
 }
 
 impl std::cmp::PartialEq for WaitingThread {
     fn eq(&self, other: &Self) -> bool {
-        self.start + self.duration == other.start + other.duration
+        self.wake_at == other.wake_at
     }
 }
 
@@ -36,7 +36,7 @@ impl std::cmp::PartialOrd for WaitingThread {
 impl std::cmp::Ord for WaitingThread {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse order
-        (other.start + other.duration).cmp(&(self.start + self.duration))
+        (other.wake_at).cmp(&(self.wake_at))
     }
 }
 
@@ -148,7 +148,10 @@ impl TaskManager {
 
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
-        self.inner.is_running.load(Ordering::Acquire)
+        #[cfg(feature = "send")]
+        return self.inner.is_running.load(Ordering::Acquire);
+        #[cfg(not(feature = "send"))]
+        return self.inner.is_running.load(Ordering::Relaxed);
     }
 
     /// Returns the feedback stored in the task manager
@@ -193,11 +196,14 @@ impl TaskManager {
     ) {
         log::debug!("Trying to add thread to waiting queue");
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
+
+        let start = std::time::Instant::now();
+        let wake_at = start + duration;
         self_ref.push(WaitingThread {
             thread,
             op,
             start: std::time::Instant::now(),
-            duration,
+            wake_at,
         });
         log::debug!("Added thread to waiting queue");
     }
@@ -267,6 +273,8 @@ impl TaskManager {
             self.process().await?;
 
             tokio::time::sleep(sleep_interval).await;
+
+            self.inner.lua.gc_restart();
         }
 
         Ok(())
@@ -284,11 +292,21 @@ impl TaskManager {
 
         //log::debug!("Queue Length After Defer: {}", self.inner.len());
         {
+            let current_time = std::time::Instant::now();
+
             loop {
                 // Pop element from self_ref
                 let entry = {
                     let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
+                    // Peek and check
+                    if let Some(entry) = self_ref.peek() {
+                        if entry.wake_at > current_time {
+                            break;
+                        }
+                    }
+
+                    // Pop out the peeked element
                     let Some(entry) = self_ref.pop() else {
                         break;
                     };
@@ -296,11 +314,7 @@ impl TaskManager {
                     entry
                 };
 
-                if let Some(entry) = self.process_waiting_thread(entry).await {
-                    let mut self_ref = self.inner.waiting_queue.borrow_mut();
-                    self_ref.push(entry);
-                    break; // Because we have a binary heap, we can break here as order is maintained
-                }
+                self.process_waiting_thread(entry, current_time).await;
             }
         }
 
@@ -356,7 +370,11 @@ impl TaskManager {
     }
 
     /// Processes a waiting thread
-    async fn process_waiting_thread(&self, thread_info: WaitingThread) -> Option<WaitingThread> {
+    async fn process_waiting_thread(
+        &self,
+        thread_info: WaitingThread,
+        current_time: std::time::Instant,
+    ) {
         /*
         if coroutine.status(thread) == "dead" then
         elseif type(data) == "table" and last_tick >= data.resume then
@@ -370,48 +388,37 @@ impl TaskManager {
         end
                  */
         match thread_info.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => None,
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
             _ => {
-                let start = thread_info.start;
-                let duration = thread_info.duration;
-                let current_time = std::time::Instant::now();
+                /*log::debug!(
+                    "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
+                    start,
+                    duration,
+                    current_time
+                );*/
 
-                if current_time - start >= duration {
-                    log::debug!(
-                        "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
-                        start,
-                        duration,
-                        current_time
-                    );
-                    // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                    let args = {
-                        match thread_info.op {
-                            WaitOp::Wait => {
-                                // Push time elapsed
-                                mlua::MultiValue::from_iter([mlua::Value::Number(
-                                    (current_time - start).as_secs_f64(),
-                                )])
-                            }
-                            WaitOp::Delay { args } => args,
+                // resume_with_error_check(thread, table.unpack(data, 1, data.n))
+                let args = {
+                    match thread_info.op {
+                        WaitOp::Wait => {
+                            // Push time elapsed
+                            let start = thread_info.start;
+
+                            mlua::MultiValue::from_iter([mlua::Value::Number(
+                                (current_time - start).as_secs_f64(),
+                            )])
                         }
-                    };
+                        WaitOp::Delay { args } => args,
+                    }
+                };
 
-                    let result = self
-                        .resume_thread("WaitingThread", thread_info.thread.clone(), args)
-                        .await;
+                let result = self
+                    .resume_thread("WaitingThread", thread_info.thread.clone(), args)
+                    .await;
 
-                    self.inner.feedback.on_response(
-                        "WaitingThread",
-                        self,
-                        &thread_info.thread,
-                        result,
-                    );
-
-                    None
-                } else {
-                    // Put thread back in queue
-                    Some(thread_info)
-                }
+                self.inner
+                    .feedback
+                    .on_response("WaitingThread", self, &thread_info.thread, result);
             }
         }
     }

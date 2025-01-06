@@ -179,7 +179,7 @@ fn main() {
                 .await
                 .expect("Failed to spawn script");
 
-            task_mgr.wait_till_done(Duration::from_millis(100)).await;
+            task_mgr.wait_till_done(Duration::from_millis(1000)).await;
         }
 
         println!("Stopping task manager");

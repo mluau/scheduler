@@ -1,5 +1,21 @@
 --!nolint UnknownGlobal
-local task = task or require("@lune/task")
+local task = task
+if task == nil then
+    if zune then
+        task = zune.task
+    else 
+        task = require("@lune/task")
+    end
+end
+
+local wait = nil
+
+if _TEST_ASYNC_WORK then
+	wait = _TEST_ASYNC_WORK
+else
+	wait = task.wait
+end
+
 
 local NUM_BATCHES = 10
 local NUM_THREADS = 100_000
@@ -14,8 +30,7 @@ for i = 1, NUM_BATCHES do
 	local counter = 0
 	for j = 1, NUM_THREADS do
 		task.spawn(function()
-			--task.wait(0.1)
-			_TEST_ASYNC_WORK(0.1)
+			wait(0.1)
 			counter += 1
 			if counter == NUM_THREADS then
 				task.spawn(thread)

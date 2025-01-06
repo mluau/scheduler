@@ -1,6 +1,11 @@
--- for testing
-local task = task or zune.task 
--- local task = task or require("@lune/task")
+local task = task
+if task == nil then
+    if zune then
+        task = zune.task
+    else 
+        task = require("@lune/task")
+    end
+end
 
 local started = os.clock()
 
