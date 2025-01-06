@@ -1,4 +1,12 @@
-local task = task or require("@lune/task")
+local task = task
+if task == nil then
+    if zune then
+        task = zune.task
+    else 
+        task = require("@lune/task")
+    end
+end
+
 local thread = task.delay(1, function(foo)
     print(foo)
     print(coroutine.yield())
