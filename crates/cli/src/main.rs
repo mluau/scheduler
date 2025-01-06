@@ -2,8 +2,8 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
-use smol::fs;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
+use tokio::fs;
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")

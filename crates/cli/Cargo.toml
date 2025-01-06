@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 mlua = { version = "0.10", features = ["luau", "async"] }
-smol = "2.0.2"
 mlua_scheduler = { version = "1.0.0", path = "../scheduler" }
 mlua_scheduler_ext = { version = "1.0.0", path = "../ext" }
 tokio = { version = "1", features = ["rt"] }
