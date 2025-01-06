@@ -101,7 +101,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
     // Adds a thread to the waiting queue
     scheduler_tab.set(
-        "addWaiting",
+        "addWaitingWait",
         lua.create_function(|lua, (th, resume): (LuaThread, f64)| {
             if resume < 0.05 {
                 return Err(LuaError::RuntimeError(
@@ -113,14 +113,15 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
             let curr_thread = lua.current_thread();
 
-            taskmgr
-                .inner
-                .feedback
-                .on_thread_add("WaitingThread", &curr_thread, &th)?;
+            taskmgr.inner.feedback.on_thread_add(
+                "WaitingThread.WaitSemantics",
+                &curr_thread,
+                &th,
+            )?;
 
             taskmgr.add_waiting_thread(
                 th,
-                LuaMultiValue::new(),
+                super::taskmgr::WaitOp::Wait,
                 std::time::Duration::from_secs_f64(resume),
             );
             Ok(())
@@ -129,7 +130,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
     // Adds a thread to the waiting queue with arguments
     scheduler_tab.set(
-        "addWaitingWithArgs",
+        "addWaitingDelay",
         lua.create_function(
             |lua, (f, resume, args): (LuaEither<LuaFunction, LuaThread>, f64, LuaMultiValue)| {
                 if resume < 0.05 {
@@ -146,14 +147,14 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 let taskmgr = super::taskmgr::get(lua);
 
                 taskmgr.inner.feedback.on_thread_add(
-                    "WaitingThreadWithArgs",
+                    "WaitingThread.DelaySemantics",
                     &lua.current_thread(),
                     &th,
                 )?;
 
                 taskmgr.add_waiting_thread(
                     th.clone(),
-                    args,
+                    super::taskmgr::WaitOp::Delay { args },
                     std::time::Duration::from_secs_f64(resume),
                 );
                 Ok(th)
@@ -249,7 +250,7 @@ local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
     if time < 0.05 then
         time = 0.05 -- Avoid 100% CPU usage
     end
-    return table.addWaitingWithArgs(task, time, ...)
+    return table.addWaitingDelay(task, time, ...)
 end
 
 local function desynchronize(...)
@@ -264,7 +265,7 @@ local function wait(time: number?): number
     if time == nil or time < 0.05 then
         time = 0.05 -- Avoid 100% CPU usage
     end
-    table.addWaiting(coroutine.running(), time)
+    table.addWaitingWait(coroutine.running(), time)
     return coroutine.yield()
 end
 

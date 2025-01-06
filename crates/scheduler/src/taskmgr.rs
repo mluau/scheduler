@@ -2,13 +2,19 @@ use crate::{XRc, XRefCell};
 use futures_util::StreamExt;
 use mlua::IntoLua;
 use std::collections::{BinaryHeap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+pub enum WaitOp {
+    // task.wait semantics
+    Wait,
+    // task.delay semantics
+    Delay { args: mlua::MultiValue },
+}
+
 pub struct WaitingThread {
-    thread: ThreadInfo,
+    thread: mlua::Thread,
+    op: WaitOp,
     start: std::time::Instant,
     duration: std::time::Duration,
 }
@@ -35,21 +41,8 @@ impl std::cmp::Ord for WaitingThread {
 }
 
 pub struct DeferredThread {
-    thread: ThreadInfo,
-}
-
-#[derive(Debug)]
-pub struct ThreadInfo {
-    pub thread: mlua::Thread,
-    pub args: mlua::MultiValue,
-}
-
-pub struct AsyncThreadInfo {
-    pub thread: mlua::Thread,
-    #[cfg(feature = "send")]
-    pub callback: Pin<Box<dyn (Future<Output = mlua::Result<mlua::MultiValue>>) + Send + Sync>>,
-    #[cfg(not(feature = "send"))]
-    pub callback: Pin<Box<dyn (Future<Output = mlua::Result<mlua::MultiValue>>)>>,
+    thread: mlua::Thread,
+    args: mlua::MultiValue,
 }
 
 #[cfg(not(feature = "send"))]
@@ -109,8 +102,8 @@ pub trait SchedulerFeedback: Send + Sync {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pub lua: mlua::Lua,
-    pub pending_resumes: XRc<AtomicU64>,
-    pub pending_asyncs: XRc<AtomicU64>,
+    pub pending_resumes: AtomicU64,
+    pub pending_asyncs: AtomicU64,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     pub is_running: AtomicBool,
@@ -129,8 +122,8 @@ impl TaskManager {
     pub fn new(lua: mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
             inner: TaskManagerInner {
-                pending_resumes: XRc::new(AtomicU64::new(0)),
-                pending_asyncs: XRc::new(AtomicU64::new(0)),
+                pending_resumes: AtomicU64::new(0),
+                pending_asyncs: AtomicU64::new(0),
                 waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
                 is_running: AtomicBool::new(false),
@@ -191,31 +184,18 @@ impl TaskManager {
         next
     }
 
-    /// Resumes a thread to next and sends feedback through the scheduler feedback
-    pub async fn resume_thread_and_send_feedback(
-        &self,
-        label: &str,
-        thread: mlua::Thread,
-        args: mlua::MultiValue,
-    ) {
-        let result = self.resume_thread(label, thread.clone(), args).await;
-        self.inner
-            .feedback
-            .on_response(label, self, &thread, result);
-    }
-
     /// Adds a waiting thread to the task manager
     pub fn add_waiting_thread(
         &self,
         thread: mlua::Thread,
-        args: mlua::MultiValue,
+        op: WaitOp,
         duration: std::time::Duration,
     ) {
         log::debug!("Trying to add thread to waiting queue");
-        let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
         self_ref.push(WaitingThread {
-            thread: tinfo,
+            thread,
+            op,
             start: std::time::Instant::now(),
             duration,
         });
@@ -228,7 +208,7 @@ impl TaskManager {
 
         let mut removed = 0;
         self_ref.retain(|x| {
-            if x.thread.thread != *thread {
+            if x.thread != *thread {
                 true
             } else {
                 removed += 1;
@@ -242,18 +222,16 @@ impl TaskManager {
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
-        let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread: tinfo });
+        self_ref.push_front(DeferredThread { thread, args });
         log::debug!("Added deferred thread to queue");
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         log::debug!("Adding deferred thread to queue");
-        let tinfo = ThreadInfo { thread, args };
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_back(DeferredThread { thread: tinfo });
+        self_ref.push_back(DeferredThread { thread, args });
         log::debug!("Added deferred thread to queue");
     }
 
@@ -263,7 +241,7 @@ impl TaskManager {
 
         let mut removed = 0;
         self_ref.retain(|x| {
-            if x.thread.thread != *thread {
+            if x.thread != *thread {
                 true
             } else {
                 removed += 1;
@@ -355,22 +333,22 @@ impl TaskManager {
                resume_with_error_check(data.thread, table.unpack(data.args))
             end
         */
-        match thread_info.thread.thread.status() {
+        match thread_info.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
             _ => {
                 //log::debug!("Trying to resume deferred thread");
                 let result = self
                     .resume_thread(
                         "DeferredThread",
-                        thread_info.thread.thread.clone(),
-                        thread_info.thread.args,
+                        thread_info.thread.clone(),
+                        thread_info.args,
                     )
                     .await;
 
                 self.inner.feedback.on_response(
                     "DeferredThread",
                     self,
-                    &thread_info.thread.thread,
+                    &thread_info.thread,
                     result,
                 );
             }
@@ -391,7 +369,7 @@ impl TaskManager {
             waiting_threads[thread] = data
         end
                  */
-        match thread_info.thread.thread.status() {
+        match thread_info.thread.status() {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => None,
             _ => {
                 let start = thread_info.start;
@@ -406,16 +384,26 @@ impl TaskManager {
                         current_time
                     );
                     // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                    let mut args = thread_info.thread.args;
-                    args.push_back(mlua::Value::Number((current_time - start).as_secs_f64()));
+                    let args = {
+                        match thread_info.op {
+                            WaitOp::Wait => {
+                                // Push time elapsed
+                                mlua::MultiValue::from_iter([mlua::Value::Number(
+                                    (current_time - start).as_secs_f64(),
+                                )])
+                            }
+                            WaitOp::Delay { args } => args,
+                        }
+                    };
+
                     let result = self
-                        .resume_thread("WaitingThread", thread_info.thread.thread.clone(), args)
+                        .resume_thread("WaitingThread", thread_info.thread.clone(), args)
                         .await;
 
                     self.inner.feedback.on_response(
                         "WaitingThread",
                         self,
-                        &thread_info.thread.thread,
+                        &thread_info.thread,
                         result,
                     );
 
@@ -451,12 +439,18 @@ impl TaskManager {
 
     /// Returns the pending resumes length
     pub fn pending_resumes_len(&self) -> usize {
-        self.inner.pending_resumes.load(Ordering::Acquire) as usize
+        #[cfg(feature = "send")]
+        return self.inner.pending_resumes.load(Ordering::Acquire) as usize;
+        #[cfg(not(feature = "send"))]
+        return self.inner.pending_resumes.load(Ordering::Relaxed) as usize;
     }
 
     /// Returns the pending asyncs length
     pub fn pending_asyncs_len(&self) -> usize {
-        self.inner.pending_asyncs.load(Ordering::Acquire) as usize
+        #[cfg(feature = "send")]
+        return self.inner.pending_asyncs.load(Ordering::Acquire) as usize;
+        #[cfg(not(feature = "send"))]
+        return self.inner.pending_asyncs.load(Ordering::Relaxed) as usize;
     }
 
     /// Returns the number of items in the whole queue

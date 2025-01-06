@@ -3,7 +3,7 @@ use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
 use smol::fs;
-use std::{env::consts::OS, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
+use std::{env::consts::OS, path::PathBuf, time::Duration};
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")
@@ -65,57 +65,12 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        pub struct TaskMgrFeedback {
-            pub limit: u64,
-            pub created: AtomicU64,
-        }
-
-        impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskMgrFeedback {
-            fn on_thread_add(
-                &self,
-                _label: &str,
-                _creator: &mlua::Thread,
-                _thread: &mlua::Thread,
-            ) -> mlua::Result<()> {
-                if self
-                    .created
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                    >= self.limit
-                {
-                    return Err(mlua::Error::RuntimeError(
-                        "Thread create+spawn+add limit reached".to_string(),
-                    ));
-                }
-
-                Ok(())
-            }
-
-            fn on_response(
-                &self,
-                label: &str,
-                _tm: &mlua_scheduler::taskmgr::TaskManager,
-                _th: &mlua::Thread,
-                result: Option<Result<mlua::MultiValue, mlua::Error>>,
-            ) {
-                if let Some(Err(e)) = result {
-                    eprintln!("Error [{}]: {}", label, e);
-                }
-            }
-        }
-
         let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
 
         lua.set_app_data(thread_tracker.clone());
 
-        let chain = mlua_scheduler_ext::feedbacks::ChainFeedback::new(
-            thread_tracker,
-            TaskMgrFeedback {
-                limit: 500000000,
-                created: AtomicU64::new(0),
-            },
-        );
-
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(chain));
+        let task_mgr =
+            mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(thread_tracker));
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 
@@ -194,9 +149,6 @@ fn main() {
         global_tab
             .set("_G", global_tab.clone())
             .expect("Failed to set _G");
-        global_tab
-            .set("__stack", global_tab.clone())
-            .expect("Failed to set __stack");
 
         // Provies writes
         // Forward to _G if key is in globals, otherwise to the table

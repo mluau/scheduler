@@ -56,9 +56,15 @@ impl Scheduler {
 
     /// Spawns a thread, discarding its output entirely
     pub async fn spawn_thread(&self, label: &str, thread: mlua::Thread, args: mlua::MultiValue) {
-        self.task_manager
-            .resume_thread_and_send_feedback(label, thread, args)
+        let resp = self
+            .task_manager
+            .resume_thread(label, thread.clone(), args)
             .await;
+
+        self.task_manager
+            .inner
+            .feedback
+            .on_response(label, &self.task_manager, &thread, resp);
     }
 
     /// Spawns a thread and then proceeds to get its output properly
@@ -79,9 +85,15 @@ impl Scheduler {
 
         let mut rx = ter.track_thread(&thread);
 
-        self.task_manager
-            .resume_thread_and_send_feedback(label, thread.clone(), args)
+        let result = self
+            .task_manager
+            .resume_thread(label, thread.clone(), args)
             .await;
+
+        self.task_manager
+            .inner
+            .feedback
+            .on_response(label, &self.task_manager, &thread, result);
 
         let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
 
