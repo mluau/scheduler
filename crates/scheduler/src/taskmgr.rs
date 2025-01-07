@@ -292,9 +292,9 @@ impl TaskManager {
 
         //log::debug!("Queue Length After Defer: {}", self.inner.len());
         {
-            let current_time = std::time::Instant::now();
-
             loop {
+                let current_time = std::time::Instant::now();
+
                 // Pop element from self_ref
                 let entry = {
                     let mut self_ref = self.inner.waiting_queue.borrow_mut();
