@@ -67,10 +67,35 @@ fn main() {
 
         let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
 
+        pub struct TaskPrintError {}
+
+        impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskPrintError {
+            fn on_response(
+                &self,
+                _label: &str,
+                _tm: &mlua_scheduler::TaskManager,
+                _th: &mlua::Thread,
+                result: Option<mlua::Result<mlua::MultiValue>>,
+            ) {
+                match result {
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        eprintln!("Error: {:?}", e);
+                    }
+                    None => {}
+                }
+            }
+        }
+
         lua.set_app_data(thread_tracker.clone());
 
-        let task_mgr =
-            mlua_scheduler::taskmgr::TaskManager::new(lua.clone(), XRc::new(thread_tracker));
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
+            lua.clone(),
+            XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
+                thread_tracker,
+                TaskPrintError {},
+            )),
+        );
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 

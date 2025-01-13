@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-mlua = { version = "0.10", features = ["luau", "async"] }
+mlua = { git = "https://github.com/mlua-rs/mlua", branch = "dev", features = ["luau", "async"] }
 mlua_scheduler = { version = "1.0.0", path = "../scheduler" }
 mlua_scheduler_ext = { version = "1.0.0", path = "../ext" }
 tokio = { version = "1", features = ["rt"] }

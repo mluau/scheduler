@@ -35,3 +35,5 @@ for current = 1, batches do
 end
 local took = os.clock() - started
 print(`Spawned {amount} sleeping threads in {took}s`)
+
+return -1

@@ -246,13 +246,8 @@ local function defer<T...>(task: Task<T...>, ...: T...): thread
     return table.addDeferredFront(task, ...)
 end
 
-local function spawn<T...>(task: Task<T...>, ...: T...): thread
-    local thread = if type(task) == "thread" then task else coroutine.create(task)
-    return coroutine.resume(thread, ...)
-end
-
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    if time < 0.05 then
+    if time == nil or time < 0.05 then
         time = 0.05 -- Avoid 100% CPU usage
     end
     return table.addWaitingDelay(task, time, ...)
@@ -267,7 +262,7 @@ local function synchronize(...)
 end
 
 local function wait(time: number?): number
-    if time < 0.05 then
+    if time == nil or time < 0.05 then
         time = 0.05 -- Avoid 100% CPU usage
     end
     table.addWaitingWait(coroutine.running(), time)

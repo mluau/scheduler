@@ -10,6 +10,10 @@ local currTime = os.clock()
 
 print("Waiting for 3 seconds")
 
+local x = task.wait(3)
+print(x)
+ 
+
 task.wait(3)
 
 print("Time waited:", os.clock() - currTime)

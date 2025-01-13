@@ -173,7 +173,17 @@ impl TaskManager {
         #[cfg(not(feature = "send"))]
         self.inner.pending_resumes.fetch_add(1, Ordering::Relaxed);
 
-        let mut async_thread = thread.into_async::<mlua::MultiValue>(args);
+        let mut async_thread = match thread.into_async(args) {
+            Ok(async_thread) => async_thread,
+            Err(e) => {
+                #[cfg(feature = "send")]
+                self.inner.pending_resumes.fetch_sub(1, Ordering::AcqRel);
+                #[cfg(not(feature = "send"))]
+                self.inner.pending_resumes.fetch_sub(1, Ordering::Relaxed);
+
+                return Some(Err(e));
+            }
+        };
 
         let next = async_thread.next().await;
 
@@ -227,18 +237,14 @@ impl TaskManager {
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        log::debug!("Adding deferred thread to queue");
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
-        log::debug!("Added deferred thread to queue");
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        log::debug!("Adding deferred thread to queue");
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_back(DeferredThread { thread, args });
-        log::debug!("Added deferred thread to queue");
+        self_ref.push_front(DeferredThread { thread, args });
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -398,27 +404,39 @@ impl TaskManager {
                 );*/
 
                 // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                let args = {
-                    match thread_info.op {
-                        WaitOp::Wait => {
-                            // Push time elapsed
-                            let start = thread_info.start;
+                match thread_info.op {
+                    WaitOp::Wait => {
+                        // Push time elapsed
+                        let start = thread_info.start;
 
-                            mlua::MultiValue::from_iter([mlua::Value::Number(
-                                (current_time - start).as_secs_f64(),
-                            )])
-                        }
-                        WaitOp::Delay { args } => args,
+                        let args = mlua::MultiValue::from_iter([mlua::Value::Number(
+                            (current_time - start).as_secs_f64(),
+                        )]);
+
+                        let result = self
+                            .resume_thread("WaitingThread", thread_info.thread.clone(), args)
+                            .await;
+
+                        self.inner.feedback.on_response(
+                            "WaitingThread",
+                            self,
+                            &thread_info.thread,
+                            result,
+                        );
+                    }
+                    WaitOp::Delay { args } => {
+                        let result = self
+                            .resume_thread("DelayedThread", thread_info.thread.clone(), args)
+                            .await;
+
+                        self.inner.feedback.on_response(
+                            "DelayedThread",
+                            self,
+                            &thread_info.thread,
+                            result,
+                        );
                     }
                 };
-
-                let result = self
-                    .resume_thread("WaitingThread", thread_info.thread.clone(), args)
-                    .await;
-
-                self.inner
-                    .feedback
-                    .on_response("WaitingThread", self, &thread_info.thread, result);
             }
         }
     }

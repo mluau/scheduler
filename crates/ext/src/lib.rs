@@ -75,13 +75,15 @@ impl Scheduler {
         label: &str,
         thread: mlua::Thread,
         args: mlua::MultiValue,
-    ) -> Option<mlua::Result<mlua::MultiValue>> {
+    ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
         let ter = self
             .task_manager
             .inner
             .lua
             .app_data_ref::<feedbacks::ThreadTracker>()
-            .expect("No ThreadResultTracker attached");
+            .ok_or(mlua::Error::external(
+                "ThreadTracker not attached to Lua state",
+            ))?;
 
         let mut rx = ter.track_thread(&thread);
 
@@ -97,19 +99,37 @@ impl Scheduler {
 
         let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
 
-        while let Some(next) = rx.recv().await {
-            log::debug!("Received value: {:?}", next);
-            value = next;
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                Some(next) = rx.recv() => {
+                    log::debug!("Received value: {:?}", next);
+                    value = next;
 
-            let status = thread.status();
-            if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
-                && rx.is_empty()
-            {
-                break;
+                    let status = thread.status();
+                    if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+                        && rx.is_empty()
+                    {
+                        break;
+                    }
+                }
+                _ = ticker.tick() => {
+                    if let Ok(next) = rx.try_recv() {
+                        log::debug!("Received value: {:?}", next);
+                        value = next;
+                    }
+
+                    let status = thread.status();
+                    if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+                        && rx.is_empty()
+                    {
+                        break;
+                    }
+                }
             }
         }
 
-        value
+        Ok(value)
     }
 
     /// Exits the scheduler with the given exit code

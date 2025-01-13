@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-mlua = { version = "0.10", features = ["luau", "async"] }
+mlua = { git = "https://github.com/mlua-rs/mlua", branch = "dev", features = ["luau", "async"] }
 tokio = { version = "1", features = ["rt", "macros", "fs", "time", "sync"] }
 log = "0.4"
 futures-util = "0.3.31"
