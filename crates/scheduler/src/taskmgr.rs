@@ -291,13 +291,17 @@ impl TaskManager {
             return; // Quick exit
         }
 
+        self.inner.scheduled_fires.borrow_mut().clear();
+
+        const MAX_RUNS: usize = 100;
+
         *self.inner.is_running.borrow_mut() = true;
 
         let mut extra_runs = 0;
         loop {
             if self.is_empty() || !self.is_running() {
                 extra_runs += 1;
-                if extra_runs > 10 {
+                if extra_runs > MAX_RUNS {
                     break;
                 }
             } else {
