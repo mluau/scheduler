@@ -108,6 +108,7 @@ pub struct TaskManagerInner {
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     pub is_running: XRefCell<bool>,
+    pub is_cancelled: XRefCell<bool>,
     pub feedback: XRc<dyn SchedulerFeedback>,
     pub run_sleep_interval: Duration,
     pub scheduled_fires: XRefCell<BinaryHeap<std::time::Instant>>,
@@ -134,6 +135,7 @@ impl TaskManager {
                 waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
                 is_running: XRefCell::new(false),
+                is_cancelled: XRefCell::new(false),
                 feedback,
                 run_sleep_interval,
                 lua,
@@ -153,6 +155,11 @@ impl TaskManager {
         self.inner
             .lua
             .set_app_data(ErrorUserdataValue(error_userdata));
+    }
+
+    /// Returns whether the task manager has been cancelled
+    pub fn is_cancelled(&self) -> bool {
+        *(self.inner.is_cancelled.borrow())
     }
 
     /// Returns whether the task manager is running
@@ -287,7 +294,7 @@ impl TaskManager {
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
     async fn run(&self) {
-        if self.is_running() {
+        if self.is_running() || self.is_cancelled() {
             return; // Quick exit
         }
 
@@ -299,6 +306,10 @@ impl TaskManager {
 
         let mut extra_runs = 0;
         loop {
+            if self.is_cancelled() {
+                break;
+            }
+
             if self.is_empty() || !self.is_running() {
                 extra_runs += 1;
                 if extra_runs > MAX_RUNS {
@@ -317,7 +328,7 @@ impl TaskManager {
 
     /// To avoid constantly running the task manager, we schedule fires that will run the task manager
     fn fire_run(&self, after: Duration) {
-        if self.is_running() {
+        if self.is_running() || self.is_cancelled() {
             return;
         }
 
@@ -513,7 +524,12 @@ impl TaskManager {
 
     /// Stops the task manager
     pub fn stop(&self) {
-        *self.inner.is_running.borrow_mut() = false;
+        *self.inner.is_cancelled.borrow_mut() = true;
+    }
+
+    /// Unstops the task manager
+    pub fn unstop(&self) {
+        *self.inner.is_cancelled.borrow_mut() = false;
     }
 
     /// Clears the task manager queues completely
@@ -557,7 +573,7 @@ impl TaskManager {
 
     /// Waits until the task manager is done
     pub async fn wait_till_done(&self, sleep_interval: Duration) {
-        while self.is_running() {
+        while !self.is_cancelled() {
             if self.is_empty() {
                 break;
             }

@@ -57,14 +57,14 @@ return callback
                             #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, res);
 
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
-
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread",
                                 &taskmgr,
                                 &th,
                                 result,
                             );
+
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
                         }
                         Err(err) => {
                             let mut result = mlua::MultiValue::new();
@@ -89,14 +89,14 @@ return callback
                             #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, result); // No need to even yield here, just tell lua resume
 
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
-
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread.Resume",
                                 &taskmgr,
                                 &th,
                                 result,
                             );
+
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
                         }
                     }
                 };
