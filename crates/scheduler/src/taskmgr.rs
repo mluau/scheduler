@@ -1,7 +1,6 @@
 use crate::{XRc, XRefCell};
 use mlua::IntoLua;
 use std::collections::{BinaryHeap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(not(feature = "fast"))]
@@ -104,12 +103,14 @@ pub trait SchedulerFeedback: Send + Sync {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pub lua: mlua::Lua,
-    pub pending_resumes: AtomicU64,
-    pub pending_asyncs: AtomicU64,
+    pub pending_resumes: XRefCell<usize>,
+    pub pending_asyncs: XRefCell<usize>,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
-    pub is_running: AtomicBool,
+    pub is_running: XRefCell<bool>,
     pub feedback: XRc<dyn SchedulerFeedback>,
+    pub run_sleep_interval: Duration,
+    pub scheduled_fires: XRefCell<BinaryHeap<std::time::Instant>>,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
 }
 
@@ -121,16 +122,22 @@ pub struct TaskManager {
 
 impl TaskManager {
     /// Creates a new task manager
-    pub fn new(lua: mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
+    pub fn new(
+        lua: mlua::Lua,
+        feedback: XRc<dyn SchedulerFeedback>,
+        run_sleep_interval: Duration,
+    ) -> Self {
         Self {
             inner: TaskManagerInner {
-                pending_resumes: AtomicU64::new(0),
-                pending_asyncs: AtomicU64::new(0),
+                pending_resumes: XRefCell::new(0),
+                pending_asyncs: XRefCell::new(0),
                 waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
-                is_running: AtomicBool::new(false),
+                is_running: XRefCell::new(false),
                 feedback,
+                run_sleep_interval,
                 lua,
+                scheduled_fires: XRefCell::new(BinaryHeap::default()),
                 async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
             }
             .into(),
@@ -150,10 +157,7 @@ impl TaskManager {
 
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
-        #[cfg(feature = "send")]
-        return self.inner.is_running.load(Ordering::Acquire);
-        #[cfg(not(feature = "send"))]
-        return self.inner.is_running.load(Ordering::Relaxed);
+        *(self.inner.is_running.borrow())
     }
 
     /// Returns the feedback stored in the task manager
@@ -227,6 +231,7 @@ impl TaskManager {
             start: std::time::Instant::now(),
             wake_at,
         });
+        self.fire_run(duration);
         log::debug!("Added thread to waiting queue");
     }
 
@@ -251,12 +256,14 @@ impl TaskManager {
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
+        self.fire_run(self.inner.run_sleep_interval);
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
+        self.fire_run(self.inner.run_sleep_interval);
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -277,27 +284,63 @@ impl TaskManager {
     }
 
     /// Runs the task manager
-    pub async fn run(&self, sleep_interval: Duration) -> Result<(), mlua::Error> {
-        self.inner.is_running.store(true, Ordering::Relaxed);
-
-        //log::debug!("Task Manager started");
-
-        loop {
-            if !self.is_running() {
-                break;
-            }
-
-            //log::debug!("Processing task manager");
-            self.process().await?;
-
-            tokio::time::sleep(sleep_interval).await;
+    ///
+    /// Note that the scheduler will automatically schedule run to be called if needed
+    async fn run(&self) {
+        if self.is_running() {
+            return; // Quick exit
         }
 
-        Ok(())
+        *self.inner.is_running.borrow_mut() = true;
+
+        let mut extra_runs = 0;
+        loop {
+            if self.is_empty() || !self.is_running() {
+                extra_runs += 1;
+                if extra_runs > 10 {
+                    break;
+                }
+            } else {
+                //log::debug!("Processing task manager");
+                self.process().await;
+            }
+
+            tokio::time::sleep(self.inner.run_sleep_interval).await;
+        }
+
+        *self.inner.is_running.borrow_mut() = false;
+    }
+
+    /// To avoid constantly running the task manager, we schedule fires that will run the task manager
+    fn fire_run(&self, after: Duration) {
+        if self.is_running() {
+            return;
+        }
+
+        let mut scheduled_fires = self.inner.scheduled_fires.borrow_mut();
+
+        let schedule_instant = std::time::Instant::now() + after;
+        if let Some(scheduled_fires) = scheduled_fires.peek() {
+            if schedule_instant < *scheduled_fires {
+                return; // We already have a scheduled fire that is sooner
+            }
+        }
+
+        scheduled_fires.push(schedule_instant);
+
+        let self_ref = self.clone();
+        #[cfg(feature = "send")]
+        tokio::task::spawn(async move {
+            self_ref.run().await;
+        });
+        #[cfg(not(feature = "send"))]
+        tokio::task::spawn_local(async move {
+            self_ref.run().await;
+        });
     }
 
     /// Processes the task manager
-    pub async fn process(&self) -> Result<(), mlua::Error> {
+    pub async fn process(&self) {
         /*log::debug!(
             "Queue Length: {}, Running: {}",
             self.inner.len(),
@@ -350,10 +393,6 @@ impl TaskManager {
                 self.process_deferred_thread(entry).await;
             }
         }
-
-        // Check all_threads, removing all finished threads and resuming all threads not in deferred_queue or waiting_queue
-
-        Ok(())
     }
 
     /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
@@ -470,7 +509,7 @@ impl TaskManager {
 
     /// Stops the task manager
     pub fn stop(&self) {
-        self.inner.is_running.store(false, Ordering::Relaxed);
+        *self.inner.is_running.borrow_mut() = false;
     }
 
     /// Clears the task manager queues completely
@@ -486,23 +525,17 @@ impl TaskManager {
 
     /// Returns the deferred queue length
     pub fn deferred_len(&self) -> usize {
-        self.inner.deferred_queue.borrow_mut().len()
+        self.inner.deferred_queue.borrow().len()
     }
 
     /// Returns the pending resumes length
     pub fn pending_resumes_len(&self) -> usize {
-        #[cfg(feature = "send")]
-        return self.inner.pending_resumes.load(Ordering::Acquire) as usize;
-        #[cfg(not(feature = "send"))]
-        return self.inner.pending_resumes.load(Ordering::Relaxed) as usize;
+        *self.inner.pending_resumes.borrow()
     }
 
     /// Returns the pending asyncs length
     pub fn pending_asyncs_len(&self) -> usize {
-        #[cfg(feature = "send")]
-        return self.inner.pending_asyncs.load(Ordering::Acquire) as usize;
-        #[cfg(not(feature = "send"))]
-        return self.inner.pending_asyncs.load(Ordering::Relaxed) as usize;
+        *self.inner.pending_asyncs.borrow()
     }
 
     /// Returns the number of items in the whole queue

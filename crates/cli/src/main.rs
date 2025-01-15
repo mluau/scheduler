@@ -2,6 +2,7 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
+use mlua_scheduler::XRefCell;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
 
@@ -67,9 +68,28 @@ fn main() {
 
         let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
 
-        pub struct TaskPrintError {}
+        pub struct TaskPrintError {
+            pub thread_limit: usize,
+            pub threads: XRc<XRefCell<usize>>,
+        }
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskPrintError {
+            fn on_thread_add(
+                &self,
+                _label: &str,
+                _creator: &mlua::Thread,
+                _thread: &mlua::Thread,
+            ) -> mlua::Result<()> {
+                let mut threads = self.threads.borrow_mut();
+                if *threads >= self.thread_limit {
+                    return Err(mlua::Error::external("Thread limit reached"));
+                }
+
+                *threads += 1;
+
+                Ok(())
+            }
+
             fn on_response(
                 &self,
                 _label: &str,
@@ -93,21 +113,17 @@ fn main() {
             lua.clone(),
             XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
                 thread_tracker,
-                TaskPrintError {},
+                TaskPrintError {
+                    thread_limit: 1000000,
+                    threads: XRc::new(XRefCell::new(0)),
+                },
             )),
+            std::time::Duration::from_millis(1),
         );
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 
         scheduler.attach();
-
-        let task_mgr_ref = task_mgr.clone();
-        local.spawn_local(async move {
-            task_mgr_ref
-                .run(Duration::from_millis(1))
-                .await
-                .expect("Failed to run task manager");
-        });
 
         lua.globals()
             .set("_OS", OS.to_lowercase())

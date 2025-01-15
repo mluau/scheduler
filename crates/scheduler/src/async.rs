@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use mlua::prelude::*;
 
 use crate::taskmgr::ErrorUserdataValue;
@@ -44,10 +42,7 @@ return callback
 
                 let taskmgr = super::taskmgr::get(&lua);
 
-                #[cfg(feature = "send")]
-                taskmgr.inner.pending_asyncs.fetch_add(1, Ordering::AcqRel);
-                #[cfg(not(feature = "send"))]
-                taskmgr.inner.pending_asyncs.fetch_add(1, Ordering::Relaxed);
+                *taskmgr.inner.pending_asyncs.borrow_mut() += 1;
 
                 let inner = taskmgr.inner.clone();
                 let mut async_executor = inner.async_task_executor.borrow_mut();
@@ -62,10 +57,7 @@ return callback
                             #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, res);
 
-                            #[cfg(feature = "send")]
-                            taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
-                            #[cfg(not(feature = "send"))]
-                            taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::Relaxed);
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread",
@@ -97,10 +89,7 @@ return callback
                             #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, result); // No need to even yield here, just tell lua resume
 
-                            #[cfg(feature = "send")]
-                            taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
-                            #[cfg(not(feature = "send"))]
-                            taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::Relaxed);
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread.Resume",
