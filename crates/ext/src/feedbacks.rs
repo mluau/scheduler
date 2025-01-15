@@ -182,11 +182,7 @@ impl SchedulerFeedback for ThreadTracker {
         result: Option<Result<mlua::MultiValue, mlua::Error>>,
     ) {
         if let Some(tx) = self.returns.borrow_mut().get(&ThreadPtr::new(th)) {
-            let _ = tx.send(match result {
-                Some(Ok(mv)) => Some(Ok(mv)),
-                Some(Err(e)) => Some(Err(e)),
-                None => None,
-            });
+            let _ = tx.send(result);
         }
     }
 }

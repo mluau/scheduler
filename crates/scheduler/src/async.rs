@@ -57,8 +57,10 @@ return callback
 
                     match res {
                         Ok(res) => {
-                            let result =
-                                taskmgr.resume_thread("AsyncThread", th.clone(), res).await;
+                            #[cfg(not(feature = "fast"))]
+                            let result = taskmgr.resume_thread_fast(th.clone(), res).await;
+                            #[cfg(feature = "fast")]
+                            let result = taskmgr.resume_thread_fast(&th, res);
 
                             #[cfg(feature = "send")]
                             taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
@@ -90,9 +92,10 @@ return callback
                                 result.push_back(mlua::Value::Nil);
                             }
 
-                            let result = taskmgr
-                                .resume_thread("AsyncThread", th.clone(), result)
-                                .await;
+                            #[cfg(not(feature = "fast"))]
+                            let result = taskmgr.resume_thread_fast(th.clone(), result).await;
+                            #[cfg(feature = "fast")]
+                            let result = taskmgr.resume_thread_fast(&th, result); // No need to even yield here, just tell lua resume
 
                             #[cfg(feature = "send")]
                             taskmgr.inner.pending_asyncs.fetch_sub(1, Ordering::AcqRel);
@@ -151,3 +154,29 @@ impl LuaSchedulerAsync for Lua {
         create_async_lua_function(self, func)
     }
 }
+
+/*pub trait LuaSchedulerAsyncUserData<T> {
+    fn add_async_method<M, A, MR, R>(&mut self, name: impl ToString, method: M)
+    where
+        T: 'static,
+        M: Fn(Lua, mlua::UserDataRef<T>, A) -> MR + mlua::MaybeSend + 'static,
+        A: FromLuaMulti,
+        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + 'static,
+        R: IntoLuaMulti;
+}
+
+impl<T> LuaSchedulerAsyncUserData<T> for mlua::UserDataRegistry<T> {
+    fn add_async_method<M, A, MR, R>(&mut self, name: impl ToString, method: M)
+    where
+        T: 'static,
+        M: Fn(Lua, mlua::UserDataRef<T>, A) -> MR + mlua::MaybeSend + 'static,
+        A: FromLuaMulti,
+        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + 'static,
+        R: IntoLuaMulti,
+    {
+        self.add_method(name, move |lua, this, args| {
+            let coroutine = lua.globals().raw_get::<LuaFunction>("coroutine")?;
+        });
+    }
+}
+*/

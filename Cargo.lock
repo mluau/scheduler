@@ -326,7 +326,6 @@ source = "git+https://github.com/mlua-rs/mlua?branch=dev#ef92a58872911fd8fed4605
 dependencies = [
  "bstr",
  "either",
- "futures-util",
  "libloading",
  "mlua-sys",
  "num-traits",

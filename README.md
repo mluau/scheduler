@@ -37,4 +37,8 @@ end)
 - Waiting tasks are stored in a priority queue (binary heap) hence allowing the scheduler to only process ready tasks.
 - Deferred tasks and async tasks are stored in a standard VecDeque.
 - When processing, the scheduler runs in the following order: async -> waiting -> deferred.
-- For proper async support, you should use the schedulers provided ``async`` module (see below). Thanks to recent scheduler reworks, the schedulers async system is as fast or faster than mlua's ``create_async_function``.
+- For proper async support, you should use the schedulers provided ``async`` module (see below). Thanks to recent scheduler reworks, the schedulers async system is as fast or faster than mlua's ``create_async_function``. The best way to avoid using these types of functions is to entirely disable mlua async altogether in your ``features`` for mlua [omit async from features = ['mlua']].
+
+## Fast Mode
+
+At the expense of fully breaking mlua's async support (``create_async_function`` and co.)
