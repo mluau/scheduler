@@ -114,7 +114,7 @@ fn main() {
             XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
                 thread_tracker,
                 TaskPrintError {
-                    thread_limit: 1000000,
+                    thread_limit: 100000000,
                     threads: XRc::new(XRefCell::new(0)),
                 },
             )),

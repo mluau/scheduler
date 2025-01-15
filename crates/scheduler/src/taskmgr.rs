@@ -111,7 +111,6 @@ pub struct TaskManagerInner {
     pub is_cancelled: XRefCell<bool>,
     pub feedback: XRc<dyn SchedulerFeedback>,
     pub run_sleep_interval: Duration,
-    pub scheduled_fires: XRefCell<BinaryHeap<std::time::Instant>>,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
 }
 
@@ -139,7 +138,6 @@ impl TaskManager {
                 feedback,
                 run_sleep_interval,
                 lua,
-                scheduled_fires: XRefCell::new(BinaryHeap::default()),
                 async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
             }
             .into(),
@@ -177,7 +175,7 @@ impl TaskManager {
     pub fn resume_thread_fast(
         &self,
         thread: &mlua::Thread,
-        args: mlua::MultiValue,
+        args: impl mlua::IntoLuaMulti,
     ) -> Option<mlua::Result<mlua::MultiValue>> {
         if thread.status() != mlua::ThreadStatus::Resumable {
             return None;
@@ -191,32 +189,20 @@ impl TaskManager {
     pub async fn resume_thread_slow(
         &self,
         thread: mlua::Thread,
-        args: mlua::MultiValue,
+        args: impl mlua::IntoLuaMulti,
     ) -> Option<mlua::Result<mlua::MultiValue>> {
-        #[cfg(feature = "send")]
-        self.inner.pending_resumes.fetch_add(1, Ordering::AcqRel);
-        #[cfg(not(feature = "send"))]
-        self.inner.pending_resumes.fetch_add(1, Ordering::Relaxed);
+        *self.inner.pending_resumes.borrow_mut() += 1;
 
         let mut async_thread = match thread.into_async(args) {
             Ok(async_thread) => async_thread,
             Err(e) => {
-                #[cfg(feature = "send")]
-                self.inner.pending_resumes.fetch_sub(1, Ordering::AcqRel);
-                #[cfg(not(feature = "send"))]
-                self.inner.pending_resumes.fetch_sub(1, Ordering::Relaxed);
-
+                *self.inner.pending_resumes.borrow_mut() -= 1;
                 return Some(Err(e));
             }
         };
 
         let next = async_thread.next().await;
-
-        #[cfg(feature = "send")]
-        self.inner.pending_resumes.fetch_sub(1, Ordering::AcqRel);
-        #[cfg(not(feature = "send"))]
-        self.inner.pending_resumes.fetch_sub(1, Ordering::Relaxed);
-
+        *self.inner.pending_resumes.borrow_mut() -= 1;
         next
     }
 
@@ -238,7 +224,7 @@ impl TaskManager {
             start: std::time::Instant::now(),
             wake_at,
         });
-        self.fire_run(duration);
+        self.fire_run();
         log::debug!("Added thread to waiting queue");
     }
 
@@ -263,14 +249,14 @@ impl TaskManager {
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
-        self.fire_run(self.inner.run_sleep_interval);
+        self.fire_run();
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
-        self.fire_run(self.inner.run_sleep_interval);
+        self.fire_run();
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -298,8 +284,6 @@ impl TaskManager {
             return; // Quick exit
         }
 
-        self.inner.scheduled_fires.borrow_mut().clear();
-
         const MAX_RUNS: usize = 100;
 
         *self.inner.is_running.borrow_mut() = true;
@@ -310,7 +294,7 @@ impl TaskManager {
                 break;
             }
 
-            if self.is_empty() || !self.is_running() {
+            if self.is_empty() {
                 extra_runs += 1;
                 if extra_runs > MAX_RUNS {
                     break;
@@ -327,21 +311,10 @@ impl TaskManager {
     }
 
     /// To avoid constantly running the task manager, we schedule fires that will run the task manager
-    fn fire_run(&self, after: Duration) {
+    fn fire_run(&self) {
         if self.is_running() || self.is_cancelled() {
             return;
         }
-
-        let mut scheduled_fires = self.inner.scheduled_fires.borrow_mut();
-
-        let schedule_instant = std::time::Instant::now() + after;
-        if let Some(scheduled_fires) = scheduled_fires.peek() {
-            if schedule_instant < *scheduled_fires {
-                return; // We already have a scheduled fire that is sooner
-            }
-        }
-
-        scheduled_fires.push(schedule_instant);
 
         let self_ref = self.clone();
         #[cfg(feature = "send")]
@@ -476,17 +449,16 @@ impl TaskManager {
                         // Push time elapsed
                         let start = thread_info.start;
 
-                        let args = mlua::MultiValue::from_iter([mlua::Value::Number(
-                            (current_time - start).as_secs_f64(),
-                        )]);
-
                         #[cfg(not(feature = "fast"))]
                         let result = self
                             .resume_thread_slow(thread_info.thread.clone(), args)
                             .await;
                         #[cfg(feature = "fast")]
                         let result = {
-                            let r = self.resume_thread_fast(&thread_info.thread, args);
+                            let r = self.resume_thread_fast(
+                                &thread_info.thread,
+                                (current_time - start).as_secs_f64(),
+                            );
                             tokio::task::yield_now().await;
                             r
                         };

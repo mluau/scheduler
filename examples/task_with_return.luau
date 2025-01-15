@@ -13,4 +13,6 @@ print("After 2 done")
 
 _TEST_ASYNC_WORK(1)
 
+print("After 1 done")
+
 return 100
