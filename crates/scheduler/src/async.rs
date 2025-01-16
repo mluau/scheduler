@@ -67,6 +67,7 @@ return callback
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
                         }
                         Err(err) => {
+                            log::info!("Error: {:?}", err);
                             let mut result = mlua::MultiValue::new();
                             result.push_back(
                                 taskmgr

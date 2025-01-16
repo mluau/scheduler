@@ -97,6 +97,10 @@ fn main() {
                 _th: &mlua::Thread,
                 result: Option<mlua::Result<mlua::MultiValue>>,
             ) {
+                if result.is_none() {
+                    let mut threads = self.threads.borrow_mut();
+                    *threads -= 1;
+                }
                 match result {
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
