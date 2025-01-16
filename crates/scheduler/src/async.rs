@@ -52,6 +52,8 @@ return callback
 
                     match res {
                         Ok(res) => {
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
+
                             #[cfg(not(feature = "fast"))]
                             let result = taskmgr.resume_thread_fast(th.clone(), res).await;
                             #[cfg(feature = "fast")]
@@ -63,8 +65,6 @@ return callback
                                 &th,
                                 result,
                             );
-
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
                         }
                         Err(err) => {
                             log::info!("Error: {:?}", err);
@@ -85,6 +85,10 @@ return callback
                                 result.push_back(mlua::Value::Nil);
                             }
 
+                            log::info!("Error[2]: {:?}", err);
+
+                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
+
                             #[cfg(not(feature = "fast"))]
                             let result = taskmgr.resume_thread_fast(th.clone(), result).await;
                             #[cfg(feature = "fast")]
@@ -96,8 +100,6 @@ return callback
                                 &th,
                                 result,
                             );
-
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
                         }
                     }
                 };
