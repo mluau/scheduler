@@ -85,7 +85,7 @@ return callback
                                 result.push_back(mlua::Value::Nil);
                             }
 
-                            log::info!("Error[2]: {:?}", err);
+                            log::info!("Error[2]: {:?}", result);
 
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
