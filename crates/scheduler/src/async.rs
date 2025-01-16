@@ -94,6 +94,8 @@ return callback
                             #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, result); // No need to even yield here, just tell lua resume
 
+                            log::info!("Error[3]: {:?}", result);
+
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread.Resume",
                                 &taskmgr,
