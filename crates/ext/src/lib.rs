@@ -63,11 +63,7 @@ impl Scheduler {
             .await;
 
         #[cfg(feature = "fast")]
-        let resp = {
-            let res = self.task_manager.resume_thread_fast(&thread, args);
-            tokio::task::yield_now().await;
-            res
-        };
+        let resp = self.task_manager.resume_thread_fast(&thread, args);
 
         self.task_manager
             .inner
@@ -102,11 +98,7 @@ impl Scheduler {
             .await;
 
         #[cfg(feature = "fast")]
-        let result = {
-            let r = self.task_manager.resume_thread_fast(&thread, args);
-            tokio::task::yield_now().await;
-            r
-        };
+        let result = self.task_manager.resume_thread_fast(&thread, args);
 
         self.task_manager
             .inner
@@ -126,6 +118,7 @@ impl Scheduler {
                     if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
                         && rx.is_empty()
                     {
+                        log::info!("Status: {:?}", status);
                         break;
                     }
                 }

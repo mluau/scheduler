@@ -144,6 +144,19 @@ fn main() {
             )
             .expect("Failed to set _OS global");
 
+        lua.globals()
+            .set(
+                "_ERROR",
+                lua.create_scheduler_async_function(|_lua, _: ()| async move {
+                    if false {
+                        return Ok(());
+                    }
+                    Err(mlua::Error::runtime("Error"))
+                })
+                .expect("Failed to create async function"),
+            )
+            .expect("Failed to set _OS global");
+
         let scheduler_lib =
             mlua_scheduler::userdata::scheduler_lib(&lua).expect("Failed to create scheduler lib");
 

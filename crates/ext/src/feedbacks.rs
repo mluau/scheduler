@@ -181,7 +181,7 @@ impl SchedulerFeedback for ThreadTracker {
         th: &mlua::Thread,
         result: Option<Result<mlua::MultiValue, mlua::Error>>,
     ) {
-        println!("ThreadTracker: {:?} from {}", result, _label);
+        log::info!("ThreadTracker: {:?} from {}", result, _label);
         if let Some(tx) = self.returns.borrow_mut().get(&ThreadPtr::new(th)) {
             let _ = tx.send(result);
         }
