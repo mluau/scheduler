@@ -104,7 +104,7 @@ fn main() {
                 match result {
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
-                        eprintln!("Error: {:?}", e);
+                        eprintln!("Error: {}", e);
                     }
                     None => {}
                 }
@@ -147,11 +147,11 @@ fn main() {
         lua.globals()
             .set(
                 "_ERROR",
-                lua.create_scheduler_async_function(|_lua, _: ()| async move {
+                lua.create_scheduler_async_function(|_lua, n: i32| async move {
                     if false {
                         return Ok(());
                     }
-                    Err(mlua::Error::runtime("Error"))
+                    Err(mlua::Error::external(n.to_string()))
                 })
                 .expect("Failed to create async function"),
             )

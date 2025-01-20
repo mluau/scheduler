@@ -1,6 +1,5 @@
 use mlua::prelude::*;
 
-use crate::taskmgr::ErrorUserdataValue;
 use crate::MaybeSync;
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
@@ -23,6 +22,7 @@ end
 return callback
             "#,
         )
+        .set_name("__sched_yield")
         .call::<LuaFunction>(lua.create_function(
             move |lua, (th, args): (LuaThread, LuaMultiValue)| {
                 let func_ref = func.clone();
@@ -67,35 +67,18 @@ return callback
                             );
                         }
                         Err(err) => {
-                            let mut result = mlua::MultiValue::new();
-                            result.push_back(
-                                taskmgr
-                                    .inner
-                                    .lua
-                                    .app_data_ref::<ErrorUserdataValue>()
-                                    .unwrap()
-                                    .0
-                                    .clone(),
-                            );
-
-                            if let Ok(v) = err.to_string().into_lua(&lua) {
-                                result.push_back(v);
-                            } else {
-                                result.push_back(mlua::Value::Nil);
-                            }
-
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
                             #[cfg(not(feature = "fast"))]
                             let result = taskmgr.resume_thread_fast(th.clone(), result).await;
                             #[cfg(feature = "fast")]
-                            let result = taskmgr.resume_thread_fast(&th, result); // No need to even yield here, just tell lua resume
+                            let result = th.resume_error::<LuaMultiValue>(err.to_string());
 
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread.Resume",
                                 &taskmgr,
                                 &th,
-                                result,
+                                Some(result),
                             );
                         }
                     }

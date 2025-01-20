@@ -1,5 +1,4 @@
 use crate::{XRc, XRefCell};
-use mlua::IntoLua;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
 
@@ -147,12 +146,6 @@ impl TaskManager {
     /// Attaches the task manager to the lua state
     pub fn attach(&self) {
         self.inner.lua.set_app_data(self.clone());
-
-        // Also save error userdata
-        let error_userdata = ErrorUserdata {}.into_lua(&self.inner.lua).unwrap();
-        self.inner
-            .lua
-            .set_app_data(ErrorUserdataValue(error_userdata));
     }
 
     /// Returns whether the task manager has been cancelled
@@ -554,13 +547,6 @@ impl TaskManager {
         }
     }
 }
-
-#[derive(Clone)]
-pub struct ErrorUserdata {}
-
-impl mlua::UserData for ErrorUserdata {}
-
-pub struct ErrorUserdataValue(pub mlua::Value);
 
 pub fn get(lua: &mlua::Lua) -> TaskManager {
     lua.app_data_ref::<TaskManager>()

@@ -82,28 +82,6 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
         })?,
     )?;
 
-    // Patch yield to error when it sees a error metatable
-    lua.load(
-        r#"
-local ERROR_USERDATA = ...
-local yield = coroutine.yield
-coroutine.yield = function(...)
-    local result = table.pack(yield(...))
-    if rawequal(result[1], ERROR_USERDATA) then
-        error(result[2])
-    end
-    return unpack(result, 1, result.n)
-end
-"#,
-    )
-    .set_name("__sched_yield")
-    .call::<()>(
-        lua.app_data_ref::<crate::taskmgr::ErrorUserdataValue>()
-            .unwrap()
-            .0
-            .clone(),
-    )?;
-
     // Patch wrap implementation
     lua.load(
         r#"
