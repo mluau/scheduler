@@ -15,4 +15,5 @@ for i = 0, 100 do
     print(a, err)
 end
 assert(a == false, "Expected false")
-_ERROR(10)
+--_ERROR(10)
+return 1, 2, pcall(_ERROR, 10)
