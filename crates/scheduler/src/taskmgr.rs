@@ -2,9 +2,6 @@ use crate::{XRc, XRefCell};
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
 
-#[cfg(not(feature = "fast"))]
-use futures_util::StreamExt;
-
 pub enum WaitOp {
     // task.wait semantics
     Wait,
@@ -163,7 +160,6 @@ impl TaskManager {
         self.inner.feedback.clone()
     }
 
-    #[cfg(feature = "fast")]
     /// Resumes a thread to next. yield_now should probably also be used here
     pub fn resume_thread_fast(
         &self,
@@ -175,28 +171,6 @@ impl TaskManager {
         }
 
         Some(thread.resume(args))
-    }
-
-    #[cfg(not(feature = "fast"))]
-    /// Resumes a thread to next
-    pub async fn resume_thread_slow(
-        &self,
-        thread: mlua::Thread,
-        args: impl mlua::IntoLuaMulti,
-    ) -> Option<mlua::Result<mlua::MultiValue>> {
-        *self.inner.pending_resumes.borrow_mut() += 1;
-
-        let mut async_thread = match thread.into_async(args) {
-            Ok(async_thread) => async_thread,
-            Err(e) => {
-                *self.inner.pending_resumes.borrow_mut() -= 1;
-                return Some(Err(e));
-            }
-        };
-
-        let next = async_thread.next().await;
-        *self.inner.pending_resumes.borrow_mut() -= 1;
-        next
     }
 
     /// Adds a waiting thread to the task manager
@@ -387,11 +361,6 @@ impl TaskManager {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
             _ => {
                 //log::debug!("Trying to resume deferred thread");
-                #[cfg(not(feature = "fast"))]
-                let result = self
-                    .resume_thread_fast(thread_info.thread.clone(), thread_info.args)
-                    .await;
-                #[cfg(feature = "fast")]
                 let result = {
                     let r = self.resume_thread_fast(&thread_info.thread, thread_info.args);
                     tokio::task::yield_now().await;
@@ -442,11 +411,6 @@ impl TaskManager {
                         // Push time elapsed
                         let start = thread_info.start;
 
-                        #[cfg(not(feature = "fast"))]
-                        let result = self
-                            .resume_thread_slow(thread_info.thread.clone(), args)
-                            .await;
-                        #[cfg(feature = "fast")]
                         let result = {
                             let r = self.resume_thread_fast(
                                 &thread_info.thread,
@@ -464,11 +428,6 @@ impl TaskManager {
                         );
                     }
                     WaitOp::Delay { args } => {
-                        #[cfg(not(feature = "fast"))]
-                        let result = self
-                            .resume_thread_fast(thread_info.thread.clone(), args)
-                            .await;
-                        #[cfg(feature = "fast")]
                         let result = {
                             let r = self.resume_thread_fast(&thread_info.thread, args);
                             tokio::task::yield_now().await;

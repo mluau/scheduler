@@ -23,65 +23,6 @@ pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
         })?,
     )?;
 
-    // Note: this function is special [hence why it doesn't use schedulers async polling system]
-    #[cfg(not(feature = "fast"))]
-    coroutine.set(
-        "resume",
-        lua.create_async_function(|lua, (th, args): (LuaThread, LuaMultiValue)| async move {
-            let taskmgr = super::taskmgr::get(&lua);
-
-            taskmgr
-                .inner
-                .feedback
-                .on_thread_add("CoroutineResume", &lua.current_thread(), &th)?;
-
-            let res = taskmgr.resume_thread_slow(th.clone(), args).await;
-
-            taskmgr
-                .inner
-                .feedback
-                .on_response("CoroutineResume", &taskmgr, &th, res.clone());
-
-            match res {
-                Some(Ok(res)) => (true, res).into_lua_multi(&lua),
-                Some(Err(err)) => {
-                    // Error, return false and error message
-                    (false, err.to_string()).into_lua_multi(&lua)
-                }
-                None => (true, LuaMultiValue::new()).into_lua_multi(&lua),
-            }
-        })?,
-    )?;
-
-    #[cfg(feature = "fast")]
-    coroutine.set(
-        "resume",
-        lua.create_function(|lua, (th, args): (LuaThread, LuaMultiValue)| {
-            let taskmgr = super::taskmgr::get(lua);
-
-            taskmgr
-                .inner
-                .feedback
-                .on_thread_add("CoroutineResume", &lua.current_thread(), &th)?;
-
-            let res = taskmgr.resume_thread_fast(&th, args);
-
-            taskmgr
-                .inner
-                .feedback
-                .on_response("CoroutineResume", &taskmgr, &th, res.clone());
-
-            match res {
-                Some(Ok(res)) => (true, res).into_lua_multi(lua),
-                Some(Err(err)) => {
-                    // Error, return false and error message
-                    (false, err.to_string()).into_lua_multi(lua)
-                }
-                None => (true, LuaMultiValue::new()).into_lua_multi(lua),
-            }
-        })?,
-    )?;
-
     // Patch wrap implementation
     lua.load(
         r#"
@@ -293,38 +234,6 @@ return {
         .set_environment(lua.globals())
         .call::<LuaTable>(scheduler_tab)?;
 
-    // task.spawn
-    //
-    // Note: this function is special [hence why it doesn't use schedulers async polling system]
-    #[cfg(not(feature = "fast"))]
-    table.set(
-        "spawn",
-        lua.create_async_function(
-            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| async move {
-                let t = match f {
-                    LuaEither::Left(f) => lua.create_thread(f)?,
-                    LuaEither::Right(t) => t,
-                };
-
-                let taskmgr = super::taskmgr::get(&lua);
-
-                taskmgr
-                    .inner
-                    .feedback
-                    .on_thread_add("TaskSpawn", &lua.current_thread(), &t)?;
-
-                let result = taskmgr.resume_thread_slow(t.clone(), args).await;
-
-                taskmgr
-                    .inner
-                    .feedback
-                    .on_response("TaskSpawn", &taskmgr, &t, result);
-
-                Ok(t)
-            },
-        )?,
-    )?;
-
     #[cfg(feature = "fast")]
     table.set(
         "spawn",
@@ -353,6 +262,8 @@ return {
             },
         )?,
     )?;
+
+    table.set_readonly(true);
 
     Ok(table)
 }

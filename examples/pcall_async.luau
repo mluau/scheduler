@@ -16,4 +16,9 @@ for i = 0, 100 do
 end
 assert(a == false, "Expected false")
 --_ERROR(10)
+
+xpcall(function(...)
+    print("XPCALL", ..., debug.info(1, "sl"))
+end, _ERROR, 10)
+
 return 1, 2, pcall(_ERROR, 10)

@@ -10,6 +10,5 @@ log = "0.4"
 tokio = { version = "1", features = ["rt", "sync"] }
 
 [features]
-default = ["fast"]
+default = []
 multithread = ["mlua_scheduler/send"]
-fast = ["mlua_scheduler/fast"]

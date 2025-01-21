@@ -54,9 +54,6 @@ return callback
                         Ok(res) => {
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
-                            #[cfg(not(feature = "fast"))]
-                            let result = taskmgr.resume_thread_fast(th.clone(), res).await;
-                            #[cfg(feature = "fast")]
                             let result = taskmgr.resume_thread_fast(&th, res);
 
                             taskmgr.inner.feedback.on_response(
@@ -69,9 +66,6 @@ return callback
                         Err(err) => {
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
-                            #[cfg(not(feature = "fast"))]
-                            let result = taskmgr.resume_thread_fast(th.clone(), result).await;
-                            #[cfg(feature = "fast")]
                             let result = th.resume_error::<LuaMultiValue>(err.to_string());
 
                             taskmgr.inner.feedback.on_response(

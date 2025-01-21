@@ -56,13 +56,6 @@ impl Scheduler {
 
     /// Spawns a thread, discarding its output entirely
     pub async fn spawn_thread(&self, label: &str, thread: mlua::Thread, args: mlua::MultiValue) {
-        #[cfg(not(feature = "fast"))]
-        let resp = self
-            .task_manager
-            .resume_thread_slow(thread.clone(), args)
-            .await;
-
-        #[cfg(feature = "fast")]
         let resp = self.task_manager.resume_thread_fast(&thread, args);
 
         self.task_manager
@@ -91,13 +84,6 @@ impl Scheduler {
 
         let mut rx = ter.track_thread(&thread);
 
-        #[cfg(not(feature = "fast"))]
-        let result = self
-            .task_manager
-            .resume_thread_slow(label, thread.clone(), args)
-            .await;
-
-        #[cfg(feature = "fast")]
         let result = self.task_manager.resume_thread_fast(&thread, args);
 
         self.task_manager
