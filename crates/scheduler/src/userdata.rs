@@ -251,7 +251,7 @@ return {
                     .feedback
                     .on_thread_add("TaskSpawn", &lua.current_thread(), &t)?;
 
-                let result = taskmgr.resume_thread_fast(&t, args);
+                let result = t.resume(args);
 
                 taskmgr
                     .inner

@@ -54,7 +54,7 @@ return callback
                         Ok(res) => {
                             *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
 
-                            let result = taskmgr.resume_thread_fast(&th, res);
+                            let result = th.resume(res);
 
                             taskmgr.inner.feedback.on_response(
                                 "AsyncThread",
@@ -72,7 +72,7 @@ return callback
                                 "AsyncThread.Resume",
                                 &taskmgr,
                                 &th,
-                                Some(result),
+                                result,
                             );
                         }
                     }

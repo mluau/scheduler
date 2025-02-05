@@ -56,7 +56,7 @@ impl Scheduler {
 
     /// Spawns a thread, discarding its output entirely
     pub async fn spawn_thread(&self, label: &str, thread: mlua::Thread, args: mlua::MultiValue) {
-        let resp = self.task_manager.resume_thread_fast(&thread, args);
+        let resp = thread.resume(args);
 
         self.task_manager
             .inner
@@ -84,7 +84,7 @@ impl Scheduler {
 
         let mut rx = ter.track_thread(&thread);
 
-        let result = self.task_manager.resume_thread_fast(&thread, args);
+        let result = thread.resume(args);
 
         self.task_manager
             .inner
@@ -98,7 +98,7 @@ impl Scheduler {
             tokio::select! {
                 Some(next) = rx.recv() => {
                     log::debug!("Received value: {:?}", next);
-                    value = next;
+                    value = Some(next);
 
                     let status = thread.status();
                     if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
@@ -111,7 +111,7 @@ impl Scheduler {
                 _ = ticker.tick() => {
                     if let Ok(next) = rx.try_recv() {
                         log::debug!("Received value: {:?}", next);
-                        value = next;
+                        value = Some(next);
                     }
 
                     let status = thread.status();

@@ -95,18 +95,13 @@ fn main() {
                 _label: &str,
                 _tm: &mlua_scheduler::TaskManager,
                 _th: &mlua::Thread,
-                result: Option<mlua::Result<mlua::MultiValue>>,
+                result: mlua::Result<mlua::MultiValue>,
             ) {
-                if result.is_none() {
-                    let mut threads = self.threads.borrow_mut();
-                    *threads -= 1;
-                }
                 match result {
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => {
+                    Ok(_) => {}
+                    Err(e) => {
                         eprintln!("Error: {}", e);
                     }
-                    None => {}
                 }
             }
         }
@@ -148,8 +143,8 @@ fn main() {
             .set(
                 "_ERROR",
                 lua.create_scheduler_async_function(|_lua, n: i32| async move {
-                    if false {
-                        return Ok(());
+                    if n % 10 == 3 {
+                        return Ok(format!("Y{}", n));
                     }
                     Err(mlua::Error::external(n.to_string()))
                 })

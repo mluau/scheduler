@@ -63,7 +63,7 @@ pub trait SchedulerFeedback {
         _label: &str,
         _tm: &TaskManager,
         _th: &mlua::Thread,
-        _result: Option<mlua::Result<mlua::MultiValue>>,
+        _result: mlua::Result<mlua::MultiValue>,
     ) {
         // Do nothing, unless overridden
     }
@@ -160,16 +160,13 @@ impl TaskManager {
         self.inner.feedback.clone()
     }
 
+    #[inline(always)]
     /// Resumes a thread to next. yield_now should probably also be used here
     pub fn resume_thread_fast(
         &self,
         thread: &mlua::Thread,
         args: impl mlua::IntoLuaMulti,
     ) -> Option<mlua::Result<mlua::MultiValue>> {
-        if thread.status() != mlua::ThreadStatus::Resumable {
-            return None;
-        }
-
         Some(thread.resume(args))
     }
 
@@ -362,7 +359,7 @@ impl TaskManager {
             _ => {
                 //log::debug!("Trying to resume deferred thread");
                 let result = {
-                    let r = self.resume_thread_fast(&thread_info.thread, thread_info.args);
+                    let r = thread_info.thread.resume(thread_info.args);
                     tokio::task::yield_now().await;
                     r
                 };
@@ -412,10 +409,9 @@ impl TaskManager {
                         let start = thread_info.start;
 
                         let result = {
-                            let r = self.resume_thread_fast(
-                                &thread_info.thread,
-                                (current_time - start).as_secs_f64(),
-                            );
+                            let r = thread_info
+                                .thread
+                                .resume((current_time - start).as_secs_f64());
                             tokio::task::yield_now().await;
                             r
                         };
@@ -429,7 +425,7 @@ impl TaskManager {
                     }
                     WaitOp::Delay { args } => {
                         let result = {
-                            let r = self.resume_thread_fast(&thread_info.thread, args);
+                            let r = thread_info.thread.resume(args);
                             tokio::task::yield_now().await;
                             r
                         };

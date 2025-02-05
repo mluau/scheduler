@@ -33,7 +33,7 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: Option<Result<mlua::MultiValue, mlua::Error>>,
+        result: Result<mlua::MultiValue, mlua::Error>,
     ) {
         self.0.on_response(label, tm, th, result.clone());
         self.1.on_response(label, tm, th, result);
@@ -96,7 +96,7 @@ impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
         label: &str,
         tm: &TaskManager,
         th: &mlua::Thread,
-        result: Option<Result<mlua::MultiValue, mlua::Error>>,
+        result: Result<mlua::MultiValue, mlua::Error>,
     ) {
         self.0.on_response(label, tm, th, result);
     }
@@ -130,10 +130,7 @@ pub struct ThreadTracker {
     #[allow(clippy::type_complexity)]
     pub returns: XRc<
         XRefCell<
-            HashMap<
-                ThreadPtr,
-                tokio::sync::mpsc::UnboundedSender<Option<mlua::Result<mlua::MultiValue>>>,
-            >,
+            HashMap<ThreadPtr, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>,
         >,
     >,
 }
@@ -156,7 +153,7 @@ impl ThreadTracker {
     pub fn track_thread(
         &self,
         th: &mlua::Thread,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<Option<mlua::Result<mlua::MultiValue>>> {
+    ) -> tokio::sync::mpsc::UnboundedReceiver<mlua::Result<mlua::MultiValue>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.returns.borrow_mut().insert(ThreadPtr::new(th), tx);
 
@@ -179,7 +176,7 @@ impl SchedulerFeedback for ThreadTracker {
         _label: &str,
         _tm: &TaskManager,
         th: &mlua::Thread,
-        result: Option<Result<mlua::MultiValue, mlua::Error>>,
+        result: Result<mlua::MultiValue, mlua::Error>,
     ) {
         log::info!("ThreadTracker: {:?} from {}", result, _label);
         if let Some(tx) = self.returns.borrow_mut().get(&ThreadPtr::new(th)) {
