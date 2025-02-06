@@ -234,7 +234,6 @@ return {
         .set_environment(lua.globals())
         .call::<LuaTable>(scheduler_tab)?;
 
-    #[cfg(feature = "fast")]
     table.set(
         "spawn",
         lua.create_function(
