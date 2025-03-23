@@ -248,7 +248,7 @@ impl TaskManager {
             return; // Quick exit
         }
 
-        const MAX_RUNS: usize = 100;
+        const MAX_RUNS: usize = 1000;
 
         *self.inner.is_running.borrow_mut() = true;
 
