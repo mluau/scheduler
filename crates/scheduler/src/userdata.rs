@@ -231,6 +231,7 @@ return {
     cancel = cancel
 }"#,
         )
+        .set_name("task")
         .set_environment(lua.globals())
         .call::<LuaTable>(scheduler_tab)?;
 
