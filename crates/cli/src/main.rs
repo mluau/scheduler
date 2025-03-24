@@ -2,7 +2,6 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
-use mlua_scheduler::XRefCell;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
 
@@ -68,10 +67,7 @@ fn main() {
 
         let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
 
-        pub struct TaskPrintError {
-            pub thread_limit: usize,
-            pub threads: XRc<XRefCell<usize>>,
-        }
+        pub struct TaskPrintError {}
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskPrintError {
             fn on_thread_add(
@@ -80,13 +76,6 @@ fn main() {
                 _creator: &mlua::Thread,
                 _thread: &mlua::Thread,
             ) -> mlua::Result<()> {
-                let mut threads = self.threads.borrow_mut();
-                if *threads >= self.thread_limit {
-                    return Err(mlua::Error::external("Thread limit reached"));
-                }
-
-                *threads += 1;
-
                 Ok(())
             }
 
@@ -112,10 +101,7 @@ fn main() {
             lua.clone(),
             XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
                 thread_tracker,
-                TaskPrintError {
-                    thread_limit: 100000000,
-                    threads: XRc::new(XRefCell::new(0)),
-                },
+                TaskPrintError {},
             )),
             std::time::Duration::from_millis(1),
         );

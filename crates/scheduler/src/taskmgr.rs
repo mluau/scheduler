@@ -1,4 +1,5 @@
 use crate::{XRc, XRefCell};
+use std::cell::Cell;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
 
@@ -42,7 +43,6 @@ pub struct DeferredThread {
     args: mlua::MultiValue,
 }
 
-#[cfg(not(feature = "send"))]
 pub trait SchedulerFeedback {
     /// Function that is called whenever a thread is added/known to the task manager
     ///
@@ -69,42 +69,15 @@ pub trait SchedulerFeedback {
     }
 }
 
-#[cfg(feature = "send")]
-pub trait SchedulerFeedback: Send + Sync {
-    /// Function that is called whenever a thread is added/known to the task manager
-    ///
-    /// Contains both the creator thread and the thread that was added
-    fn on_thread_add(
-        &self,
-        _label: &str,
-        _creator: &mlua::Thread,
-        _thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        // Do nothing, unless overridden
-        Ok(())
-    }
-
-    /// Function that is called when any response, Ok or Error occurs
-    fn on_response(
-        &self,
-        _label: &str,
-        _tm: &TaskManager,
-        _th: &mlua::Thread,
-        _result: Option<mlua::Result<mlua::MultiValue>>,
-    ) {
-        // Do nothing, unless overridden
-    }
-}
-
 /// Inner task manager state
 pub struct TaskManagerInner {
     pub lua: mlua::Lua,
-    pub pending_resumes: XRefCell<usize>,
-    pub pending_asyncs: XRefCell<usize>,
+    pub pending_resumes: Cell<usize>,
+    pub pending_asyncs: Cell<usize>,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
-    pub is_running: XRefCell<bool>,
-    pub is_cancelled: XRefCell<bool>,
+    pub is_running: Cell<bool>,
+    pub is_cancelled: Cell<bool>,
     pub feedback: XRc<dyn SchedulerFeedback>,
     pub run_sleep_interval: Duration,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
@@ -125,12 +98,12 @@ impl TaskManager {
     ) -> Self {
         Self {
             inner: TaskManagerInner {
-                pending_resumes: XRefCell::new(0),
-                pending_asyncs: XRefCell::new(0),
+                pending_resumes: Cell::new(0),
+                pending_asyncs: Cell::new(0),
                 waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
-                is_running: XRefCell::new(false),
-                is_cancelled: XRefCell::new(false),
+                is_running: Cell::new(false),
+                is_cancelled: Cell::new(false),
                 feedback,
                 run_sleep_interval,
                 lua,
@@ -147,12 +120,12 @@ impl TaskManager {
 
     /// Returns whether the task manager has been cancelled
     pub fn is_cancelled(&self) -> bool {
-        *(self.inner.is_cancelled.borrow())
+        self.inner.is_cancelled.get()
     }
 
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
-        *(self.inner.is_running.borrow())
+        self.inner.is_running.get()
     }
 
     /// Returns the feedback stored in the task manager
@@ -179,7 +152,6 @@ impl TaskManager {
     ) {
         log::debug!("Trying to add thread to waiting queue");
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
-
         let start = std::time::Instant::now();
         let wake_at = start + duration;
         self_ref.push(WaitingThread {
@@ -248,30 +220,19 @@ impl TaskManager {
             return; // Quick exit
         }
 
-        const MAX_RUNS: usize = 1000;
+        self.inner.is_running.set(true);
 
-        *self.inner.is_running.borrow_mut() = true;
-
-        let mut extra_runs = 0;
         loop {
             if self.is_cancelled() {
                 break;
             }
 
-            if self.is_empty() {
-                extra_runs += 1;
-                if extra_runs > MAX_RUNS {
-                    break;
-                }
-            } else {
-                //log::debug!("Processing task manager");
-                self.process().await;
-            }
+            self.process().await;
 
             tokio::time::sleep(self.inner.run_sleep_interval).await;
         }
 
-        *self.inner.is_running.borrow_mut() = false;
+        self.inner.is_running.set(false)
     }
 
     /// To avoid constantly running the task manager, we schedule fires that will run the task manager
@@ -281,11 +242,7 @@ impl TaskManager {
         }
 
         let self_ref = self.clone();
-        #[cfg(feature = "send")]
-        tokio::task::spawn(async move {
-            self_ref.run().await;
-        });
-        #[cfg(not(feature = "send"))]
+
         tokio::task::spawn_local(async move {
             self_ref.run().await;
         });
@@ -444,12 +401,12 @@ impl TaskManager {
 
     /// Stops the task manager
     pub fn stop(&self) {
-        *self.inner.is_cancelled.borrow_mut() = true;
+        self.inner.is_cancelled.set(true);
     }
 
     /// Unstops the task manager
     pub fn unstop(&self) {
-        *self.inner.is_cancelled.borrow_mut() = false;
+        self.inner.is_cancelled.set(false);
     }
 
     /// Clears the task manager queues completely
@@ -470,12 +427,12 @@ impl TaskManager {
 
     /// Returns the pending resumes length
     pub fn pending_resumes_len(&self) -> usize {
-        *self.inner.pending_resumes.borrow()
+        self.inner.pending_resumes.get()
     }
 
     /// Returns the pending asyncs length
     pub fn pending_asyncs_len(&self) -> usize {
-        *self.inner.pending_asyncs.borrow()
+        self.inner.pending_asyncs.get()
     }
 
     /// Returns the number of items in the whole queue

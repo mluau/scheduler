@@ -11,4 +11,3 @@ tokio = { version = "1", features = ["rt", "sync"] }
 
 [features]
 default = []
-multithread = ["mlua_scheduler/send"]

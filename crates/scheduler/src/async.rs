@@ -42,7 +42,10 @@ return callback
 
                 let taskmgr = super::taskmgr::get(&lua);
 
-                *taskmgr.inner.pending_asyncs.borrow_mut() += 1;
+                {
+                    let current_pending = taskmgr.inner.pending_asyncs.get();
+                    taskmgr.inner.pending_asyncs.set(current_pending + 1);
+                }
 
                 let inner = taskmgr.inner.clone();
                 let mut async_executor = inner.async_task_executor.borrow_mut();
@@ -52,7 +55,10 @@ return callback
 
                     match res {
                         Ok(res) => {
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
+                            {
+                                let current_pending = taskmgr.inner.pending_asyncs.get();
+                                taskmgr.inner.pending_asyncs.set(current_pending - 1);
+                            }
 
                             let result = th.resume(res);
 
@@ -64,7 +70,10 @@ return callback
                             );
                         }
                         Err(err) => {
-                            *taskmgr.inner.pending_asyncs.borrow_mut() -= 1;
+                            {
+                                let current_pending = taskmgr.inner.pending_asyncs.get();
+                                taskmgr.inner.pending_asyncs.set(current_pending - 1);
+                            }
 
                             let result = th.resume_error::<LuaMultiValue>(err.to_string());
 
@@ -78,10 +87,7 @@ return callback
                     }
                 };
 
-                #[cfg(not(feature = "send"))]
                 async_executor.spawn_local(fut);
-                #[cfg(feature = "send")]
-                async_executor.spawn(fut);
 
                 Ok(())
             },

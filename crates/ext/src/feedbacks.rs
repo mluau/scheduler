@@ -44,22 +44,7 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
 ///
 /// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
 /// can be more efficient
-#[cfg(not(feature = "multithread"))]
 pub trait ThreadAddMiddleware {
-    fn on_thread_add(
-        &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()>;
-}
-
-/// Not all scheduler feedbacks need both on_thread_add and on_response
-///
-/// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
-/// can be more efficient
-#[cfg(feature = "multithread")]
-pub trait ThreadAddMiddleware: Send + Sync {
     fn on_thread_add(
         &self,
         label: &str,
@@ -102,25 +87,12 @@ impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
     }
 }
 
-#[cfg(not(feature = "multithread"))]
 #[derive(Hash, Eq, PartialEq)]
 pub struct ThreadPtr(*const std::ffi::c_void);
 
-#[cfg(feature = "multithread")]
-#[derive(Hash, Eq, PartialEq)]
-pub struct ThreadPtr(String);
-
-#[cfg(not(feature = "multithread"))]
 impl ThreadPtr {
     pub fn new(thread: &mlua::Thread) -> Self {
         Self(thread.to_pointer())
-    }
-}
-
-#[cfg(feature = "multithread")]
-impl ThreadPtr {
-    pub fn new(thread: &mlua::Thread) -> Self {
-        Self(format!("{:?}", thread.to_pointer()))
     }
 }
 
