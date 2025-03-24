@@ -1,6 +1,6 @@
 use mlua::prelude::*;
 
-use crate::MaybeSync;
+use crate::{MaybeSync, TaskManager};
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
 where
@@ -28,13 +28,14 @@ return callback
     Ok(func)
 }
 
-/// Create an async lua function with a custom luau code
+/// Create an async lua function with custom luau code (e.g. to extract stack traces/chunk names for custom requires etc.)
 ///
 /// This luau code will be passed the ``luacall`` function as its first argument.
 pub fn create_async_lua_function_with<A, F, R, FR>(
     lua: &Lua,
     func: F,
     lua_code: &str,
+    extra_args: LuaMultiValue,
 ) -> LuaResult<LuaFunction>
 where
     A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
@@ -45,7 +46,7 @@ where
     let func = lua
         .load(lua_code)
         .set_name("__sched_yield")
-        .call::<LuaFunction>(inner_async_func(lua, func))?;
+        .call::<LuaFunction>((inner_async_func(lua, func)?, extra_args))?;
 
     Ok(func)
 }
@@ -72,14 +73,15 @@ where
             }
         };
 
-        let lua = lua.clone();
-
-        let taskmgr = super::taskmgr::get(&lua);
+        let taskmgr = lua
+            .app_data_ref::<TaskManager>()
+            .expect("Failed to get task manager")
+            .clone();
 
         {
             let current_pending = taskmgr.inner.pending_asyncs.get();
             taskmgr.inner.pending_asyncs.set(current_pending + 1);
-        }
+        };
 
         let inner = taskmgr.inner.clone();
         let mut async_executor = inner.async_task_executor.borrow_mut();
@@ -145,6 +147,7 @@ pub trait LuaSchedulerAsync {
         &self,
         func: F,
         lua_code: &str,
+        extra_args: LuaMultiValue,
     ) -> LuaResult<LuaFunction>
     where
         A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
@@ -168,6 +171,7 @@ impl LuaSchedulerAsync for Lua {
         &self,
         func: F,
         lua_code: &str,
+        extra_args: LuaMultiValue,
     ) -> LuaResult<LuaFunction>
     where
         A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
@@ -175,7 +179,7 @@ impl LuaSchedulerAsync for Lua {
         R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
         FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
     {
-        create_async_lua_function_with(self, func, lua_code)
+        create_async_lua_function_with(self, func, lua_code, extra_args)
     }
 }
 

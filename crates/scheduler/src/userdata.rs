@@ -43,30 +43,32 @@ end"#,
 }
 
 /// Returns the low-level Scheduler library of which task lib is based on
+///
+/// Note that task manager must be attached prior to calling this function
 pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
+    let taskmgr_parent = super::taskmgr::get(lua);
+
     let scheduler_tab = lua.create_table()?;
 
     // Adds a thread to the waiting queue
+    let taskmgr_wq_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "addWaitingWait",
-        lua.create_function(|lua, (th, resume): (LuaThread, f64)| {
+        lua.create_function(move |lua, (th, resume): (LuaThread, Option<f64>)| {
+            let mut resume = resume.unwrap_or_default();
             if resume < 0.05 {
-                return Err(LuaError::RuntimeError(
-                    "Cannot wait for less than 0.05 seconds".to_string(),
-                ));
+                resume = 0.05; // Avoid 100% CPU usage
             }
-
-            let taskmgr = super::taskmgr::get(lua);
 
             let curr_thread = lua.current_thread();
 
-            taskmgr.inner.feedback.on_thread_add(
+            taskmgr_wq_ref.inner.feedback.on_thread_add(
                 "WaitingThread.WaitSemantics",
                 &curr_thread,
                 &th,
             )?;
 
-            taskmgr.add_waiting_thread(
+            taskmgr_wq_ref.add_waiting_thread(
                 th,
                 super::taskmgr::WaitOp::Wait,
                 std::time::Duration::from_secs_f64(resume),
@@ -76,14 +78,19 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     // Adds a thread to the waiting queue with arguments
+    let taskmgr_delay_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "addWaitingDelay",
         lua.create_function(
-            |lua, (f, resume, args): (LuaEither<LuaFunction, LuaThread>, f64, LuaMultiValue)| {
+            move |lua,
+                  (f, resume, args): (
+                LuaEither<LuaFunction, LuaThread>,
+                Option<f64>,
+                LuaMultiValue,
+            )| {
+                let mut resume = resume.unwrap_or_default();
                 if resume < 0.05 {
-                    return Err(LuaError::RuntimeError(
-                        "Cannot wait for less than 0.05 seconds".to_string(),
-                    ));
+                    resume = 0.05; // Avoid 100% CPU usage
                 }
 
                 let th = match f {
@@ -91,15 +98,13 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(t) => t,
                 };
 
-                let taskmgr = super::taskmgr::get(lua);
-
-                taskmgr.inner.feedback.on_thread_add(
+                taskmgr_delay_ref.inner.feedback.on_thread_add(
                     "WaitingThread.DelaySemantics",
                     &lua.current_thread(),
                     &th,
                 )?;
 
-                taskmgr.add_waiting_thread(
+                taskmgr_delay_ref.add_waiting_thread(
                     th.clone(),
                     super::taskmgr::WaitOp::Delay { args },
                     std::time::Duration::from_secs_f64(resume),
@@ -110,70 +115,66 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     // Removes a thread from the waiting queue, returning the number of threads removed
+    let taskmgr_remove_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "removeWaiting",
-        lua.create_function(|lua, th: LuaThread| {
-            let taskmgr = super::taskmgr::get(lua);
-
-            Ok(taskmgr.remove_waiting_thread(&th))
+        lua.create_function(move |_lua, th: LuaThread| {
+            Ok(taskmgr_remove_ref.remove_waiting_thread(&th))
         })?,
     )?;
 
     // Adds a thread to the deferred queue at the front
+    let taskmgr_front_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "addDeferredFront",
         lua.create_function(
-            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
 
-                let taskmgr = super::taskmgr::get(lua);
-
-                taskmgr.inner.feedback.on_thread_add(
+                taskmgr_front_ref.inner.feedback.on_thread_add(
                     "DeferredThread",
                     &lua.current_thread(),
                     &th,
                 )?;
 
-                taskmgr.add_deferred_thread_front(th.clone(), args);
+                taskmgr_front_ref.add_deferred_thread_front(th.clone(), args);
                 Ok(th)
             },
         )?,
     )?;
 
     // Adds a thread to the deferred queue at the back
+    let taskmgr_back_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "addDeferredBack",
         lua.create_function(
-            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
                 };
 
-                let taskmgr = super::taskmgr::get(lua);
-
-                taskmgr.inner.feedback.on_thread_add(
+                taskmgr_back_ref.inner.feedback.on_thread_add(
                     "DeferredThread",
                     &lua.current_thread(),
                     &th,
                 )?;
 
-                taskmgr.add_deferred_thread_back(th.clone(), args);
+                taskmgr_back_ref.add_deferred_thread_back(th.clone(), args);
                 Ok(th)
             },
         )?,
     )?;
 
     // Removes a thread from the deferred queue returning the number of threads removed
+    let taskmgr_remove_deferred_ref = taskmgr_parent.clone();
     scheduler_tab.set(
         "removeDeferred",
-        lua.create_function(|lua, th: LuaThread| {
-            let taskmgr = super::taskmgr::get(lua);
-
-            Ok(taskmgr.remove_deferred_thread(&th))
+        lua.create_function(move |_lua, th: LuaThread| {
+            Ok(taskmgr_remove_deferred_ref.remove_deferred_thread(&th))
         })?,
     )?;
 
@@ -194,9 +195,6 @@ local function defer<T...>(task: Task<T...>, ...: T...): thread
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    if time == nil or time < 0.05 then
-        time = 0.05 -- Avoid 100% CPU usage
-    end
     return table.addWaitingDelay(task, time, ...)
 end
 
@@ -209,9 +207,6 @@ local function synchronize(...)
 end
 
 local function wait(time: number?): number
-    if time == nil or time < 0.05 then
-        time = 0.05 -- Avoid 100% CPU usage
-    end
     table.addWaitingWait(coroutine.running(), time)
     return coroutine.yield()
 end

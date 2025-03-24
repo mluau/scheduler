@@ -116,6 +116,7 @@ impl TaskManager {
     /// Attaches the task manager to the lua state
     pub fn attach(&self) {
         self.inner.lua.set_app_data(self.clone());
+        self.run_in_task();
     }
 
     /// Returns whether the task manager has been cancelled
@@ -129,8 +130,8 @@ impl TaskManager {
     }
 
     /// Returns the feedback stored in the task manager
-    pub fn feedback(&self) -> XRc<dyn SchedulerFeedback> {
-        self.inner.feedback.clone()
+    pub fn feedback(&self) -> &dyn SchedulerFeedback {
+        &*self.inner.feedback
     }
 
     #[inline(always)]
@@ -160,7 +161,6 @@ impl TaskManager {
             start,
             wake_at,
         });
-        self.fire_run();
         log::debug!("Added thread to waiting queue");
     }
 
@@ -185,14 +185,12 @@ impl TaskManager {
     pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
-        self.fire_run();
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
         self_ref.push_front(DeferredThread { thread, args });
-        self.fire_run();
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -222,6 +220,8 @@ impl TaskManager {
 
         self.inner.is_running.set(true);
 
+        log::info!("Task manager started");
+
         loop {
             if self.is_cancelled() {
                 break;
@@ -235,11 +235,14 @@ impl TaskManager {
         self.inner.is_running.set(false)
     }
 
-    /// To avoid constantly running the task manager, we schedule fires that will run the task manager
-    fn fire_run(&self) {
+    /// Helper method to start up the task manager
+    /// from a synchronous context
+    pub fn run_in_task(&self) {
         if self.is_running() || self.is_cancelled() {
             return;
         }
+
+        log::info!("Firing up task manager");
 
         let self_ref = self.clone();
 
@@ -460,8 +463,7 @@ impl TaskManager {
     }
 }
 
-pub fn get(lua: &mlua::Lua) -> TaskManager {
+pub fn get(lua: &mlua::Lua) -> mlua::AppDataRef<TaskManager> {
     lua.app_data_ref::<TaskManager>()
         .expect("Failed to get task manager")
-        .clone()
 }
