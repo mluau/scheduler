@@ -157,7 +157,7 @@ impl TaskManager {
         self_ref.push(WaitingThread {
             thread,
             op,
-            start: std::time::Instant::now(),
+            start,
             wake_at,
         });
         self.fire_run();
