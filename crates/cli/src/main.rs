@@ -127,13 +127,25 @@ fn main() {
             .expect("Failed to set _OS global");
 
         let count_v = Cell::new(0);
+
+        let mut max_threads = i64::MAX;
+
+        if let Ok(v) = std::env::var("MAX_THREADS") {
+            if let Ok(v) = v.parse::<i64>() {
+                if v > 0 && v < max_threads {
+                    // Override the max threads
+                    max_threads = v;
+                }
+            }
+        }
+
         lua.set_thread_event_callback(move |_lua, value| {
             match value {
                 LuaValue::Thread(_) => count_v.set(count_v.get() + 1),
                 _ => count_v.set(count_v.get() - 1),
             };
 
-            if count_v.get() > 1000000 {
+            if count_v.get() > max_threads {
                 // Prevent runaway threads
                 Err(mlua::Error::RuntimeError(
                     "Too many threads created, possible runaway detected".to_string(),
