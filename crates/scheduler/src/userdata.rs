@@ -175,46 +175,25 @@ local function cancel(thread: thread): ()
     coroutine.close(thread)
 end
 
+local function spawn(task: TaskFunction, ...: any): thread
+    local thread = if type(task) == "thread" then task else coroutine.create(task)
+    coroutine.resume(thread, ...)
+    return thread
+end
+
 return {
     defer = defer,
     delay = delay,
     desynchronize = desynchronize,
     synchronize = synchronize,
     wait = wait,
-    cancel = cancel
+    cancel = cancel,
+    spawn = spawn,
 }"#,
         )
         .set_name("task")
         .set_environment(lua.globals())
         .call::<LuaTable>(scheduler_tab)?;
-
-    table.set(
-        "spawn",
-        lua.create_function(
-            |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
-                let t = match f {
-                    LuaEither::Left(f) => lua.create_thread(f)?,
-                    LuaEither::Right(t) => t,
-                };
-
-                let taskmgr = super::taskmgr::get(lua);
-
-                taskmgr
-                    .inner
-                    .feedback
-                    .on_thread_add("TaskSpawn", &lua.current_thread(), &t)?;
-
-                let result = t.resume(args);
-
-                taskmgr
-                    .inner
-                    .feedback
-                    .on_response("TaskSpawn", &taskmgr, &t, result);
-
-                Ok(t)
-            },
-        )?,
-    )?;
 
     table.set_readonly(true);
 
