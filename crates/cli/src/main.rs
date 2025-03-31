@@ -2,6 +2,7 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
+use std::cell::Cell;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
 
@@ -125,6 +126,23 @@ fn main() {
             )
             .expect("Failed to set _OS global");
 
+        let count_v = Cell::new(0);
+        lua.set_thread_event_callback(move |_lua, value| {
+            match value {
+                LuaValue::Thread(_) => count_v.set(count_v.get() + 1),
+                _ => count_v.set(count_v.get() - 1),
+            };
+
+            if count_v.get() > 1000000 {
+                // Prevent runaway threads
+                Err(mlua::Error::RuntimeError(
+                    "Too many threads created, possible runaway detected".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        });
+
         lua.globals()
             .set(
                 "_ERROR",
@@ -152,8 +170,6 @@ fn main() {
                     .expect("Failed to create table"),
             )
             .expect("Failed to set task global");
-
-        mlua_scheduler::userdata::patch_coroutine_lib(&lua).expect("Failed to patch coroutine lib");
 
         lua.sandbox(true).expect("Sandboxed VM"); // Sandbox VM
 

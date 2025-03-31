@@ -1,47 +1,5 @@
 use mlua::prelude::*;
 
-/// Patches the coroutine library to both work with the scheduler properly, but also to be more sane without deadlocking
-pub fn patch_coroutine_lib(lua: &Lua) -> LuaResult<()> {
-    let coroutine = lua.globals().get::<LuaTable>("coroutine")?;
-
-    // Custom coroutine.create that also sends on_thread_add
-    coroutine.set(
-        "create",
-        lua.create_function(|lua, f: LuaFunction| {
-            let taskmgr = super::taskmgr::get(lua);
-
-            let curr_thread = lua.current_thread();
-
-            let th = lua.create_thread(f)?;
-
-            taskmgr
-                .inner
-                .feedback
-                .on_thread_add("CoroutineCreate", &curr_thread, &th)?;
-
-            Ok(th)
-        })?,
-    )?;
-
-    // Patch wrap implementation
-    lua.load(
-        r#"
-coroutine.wrap = function(...)
-    local t = coroutine.create(...)
-    local r = { coroutine.resume(t, ...) }
-    if r[1] then
-        return select(2, unpack(r))
-    else
-        error(r[2], 2)
-    end
-end"#,
-    )
-    .set_name("__sched_wrap")
-    .call::<()>(())?;
-
-    Ok(())
-}
-
 /// Returns the low-level Scheduler library of which task lib is based on
 ///
 /// Note that task manager must be attached prior to calling this function
