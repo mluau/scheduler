@@ -2,6 +2,7 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
+use mlua_scheduler_ext::Scheduler;
 use std::cell::Cell;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
@@ -139,7 +140,7 @@ fn main() {
             }
         }
 
-        lua.set_thread_event_callback(move |_lua, value| {
+        lua.set_thread_event_callback(move |lua, value| {
             match value {
                 LuaValue::Thread(_) => count_v.set(count_v.get() + 1),
                 _ => count_v.set(count_v.get() - 1),
@@ -147,9 +148,31 @@ fn main() {
 
             if count_v.get() > max_threads {
                 // Prevent runaway threads
-                Err(mlua::Error::RuntimeError(
+                println!(
+                    "Warning: Thread count exceeded limit: {} (max: {}). The exact way the thread will error is UNDEFINED BEHAVIOR but is guaranteed to be safe from a memory standpoint",
+                    count_v.get(),
+                    max_threads
+                );
+
+                let err = mlua::Error::RuntimeError(
                     "Too many threads created, possible runaway detected".to_string(),
-                ))
+                );
+
+                // Push the error to the scheduler
+                if let LuaValue::Thread(th) = value {
+                    let scheduler = Scheduler::get(lua);
+                    if let Err(e) = scheduler
+                    .feedback()
+                    .on_thread_add("AddFailedThread", &lua.current_thread(), &th) {
+                        println!("Failed to track thread due to: {}", e);
+                    }           
+
+                    scheduler
+                    .feedback()
+                    .on_response("AddFailedThread", &scheduler, &th, Err(err.clone()));               
+                }
+                
+                Err(err)
             } else {
                 Ok(())
             }

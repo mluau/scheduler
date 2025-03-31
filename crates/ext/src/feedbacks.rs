@@ -131,6 +131,16 @@ impl ThreadTracker {
 
         rx
     }
+
+    /// Push a result to the tracked thread
+    pub fn push_result(&self, th: &mlua::Thread, result: mlua::Result<mlua::MultiValue>) {
+        log::trace!("ThreadTracker: Pushing result to thread {:?}", th);
+        if let Some(tx) = self.returns.borrow().get(&ThreadPtr::new(th)) {
+            let _ = tx.send(result);
+        } else {
+            log::warn!("ThreadTracker: No sender found for thread {:?}", th);
+        }
+    }
 }
 
 impl SchedulerFeedback for ThreadTracker {
