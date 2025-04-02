@@ -127,7 +127,7 @@ fn main() {
             )
             .expect("Failed to set _OS global");
 
-        let count_v = Cell::new(0);
+        /*let count_v = Cell::new(0);
 
         let mut max_threads = i64::MAX;
 
@@ -176,7 +176,7 @@ fn main() {
             } else {
                 Ok(())
             }
-        });
+        });*/
 
         lua.globals()
             .set(
