@@ -151,7 +151,7 @@ impl TaskManager {
         op: WaitOp,
         duration: std::time::Duration,
     ) {
-        log::debug!("Trying to add thread to waiting queue");
+        log::trace!("Trying to add thread to waiting queue");
         let mut self_ref = self.inner.waiting_queue.borrow_mut();
         let start = std::time::Instant::now();
         let wake_at = start + duration;
@@ -161,7 +161,7 @@ impl TaskManager {
             start,
             wake_at,
         });
-        log::debug!("Added thread to waiting queue");
+        log::trace!("Added thread to waiting queue");
     }
 
     /// Removes a waiting thread from the task manager returning the number of threads removed
@@ -220,7 +220,7 @@ impl TaskManager {
 
         self.inner.is_running.set(true);
 
-        log::info!("Task manager started");
+        log::debug!("Task manager started");
 
         loop {
             if self.is_cancelled() {
@@ -242,7 +242,7 @@ impl TaskManager {
             return;
         }
 
-        log::info!("Firing up task manager");
+        log::debug!("Firing up task manager");
 
         let self_ref = self.clone();
 

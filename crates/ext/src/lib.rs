@@ -97,20 +97,20 @@ impl Scheduler {
         loop {
             tokio::select! {
                 Some(next) = rx.recv() => {
-                    log::debug!("Received value: {:?}", next);
+                    log::trace!("Received value: {:?}", next);
                     value = Some(next);
 
                     let status = thread.status();
                     if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
                         && rx.is_empty()
                     {
-                        log::info!("Status: {:?}", status);
+                        log::trace!("Status: {:?}", status);
                         break;
                     }
                 }
                 _ = ticker.tick() => {
                     if let Ok(next) = rx.try_recv() {
-                        log::debug!("Received value: {:?}", next);
+                        log::trace!("Received value: {:?}", next);
                         value = Some(next);
                     }
 
