@@ -1,6 +1,7 @@
 mod r#async;
 pub mod taskmgr;
 pub mod userdata;
+pub mod task;
 
 pub use r#async::LuaSchedulerAsync;
 pub use taskmgr::TaskManager;

@@ -7,7 +7,9 @@ pub enum WaitOp {
     // task.wait semantics
     Wait,
     // task.delay semantics
-    Delay { args: mlua::MultiValue },
+    Delay { 
+        args: mlua::MultiValue,
+    },
 }
 
 pub struct WaitingThread {
@@ -41,6 +43,7 @@ impl std::cmp::Ord for WaitingThread {
 pub struct DeferredThread {
     thread: mlua::Thread,
     args: mlua::MultiValue,
+    resume_after: Vec<mlua::Thread>,
 }
 
 pub trait SchedulerFeedback {
@@ -134,16 +137,6 @@ impl TaskManager {
         &*self.inner.feedback
     }
 
-    #[inline(always)]
-    /// Resumes a thread to next. yield_now should probably also be used here
-    pub fn resume_thread_fast(
-        &self,
-        thread: &mlua::Thread,
-        args: impl mlua::IntoLuaMulti,
-    ) -> Option<mlua::Result<mlua::MultiValue>> {
-        Some(thread.resume(args))
-    }
-
     /// Adds a waiting thread to the task manager
     pub fn add_waiting_thread(
         &self,
@@ -182,15 +175,15 @@ impl TaskManager {
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue, resume_after: Vec<mlua::Thread>) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args });
+        self_ref.push_front(DeferredThread { thread, args, resume_after });
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue, resume_after: Vec<mlua::Thread>) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args });
+        self_ref.push_front(DeferredThread { thread, args, resume_after });
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -299,6 +292,23 @@ impl TaskManager {
                         break;
                     };
 
+                    let mut process = true;
+
+                    for resume_after in entry.resume_after.iter() {
+                        // Check if the thread is dead
+                        if resume_after.status() != mlua::ThreadStatus::Error
+                            && resume_after.status() != mlua::ThreadStatus::Finished
+                        {
+                            process = false;
+                            break;
+                        }
+                    }
+
+                    if !process {
+                        self_ref.push_back(entry);
+                        continue;
+                    }
+
                     entry
                 };
 
@@ -307,7 +317,7 @@ impl TaskManager {
         }
     }
 
-    /// Processes a deferred thread. Returns true if the thread is still running and should be readded to the list of deferred tasks
+    /// Processes a deferred thread.
     async fn process_deferred_thread(&self, thread_info: DeferredThread) {
         /*
             if coroutine.status(data.thread) ~= "dead" then
@@ -318,18 +328,16 @@ impl TaskManager {
             mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
             _ => {
                 //log::debug!("Trying to resume deferred thread");
-                let result = {
+                {
                     let r = thread_info.thread.resume(thread_info.args);
+                    self.inner.feedback.on_response(
+                        "DeferredThread",
+                        self,
+                        &thread_info.thread,
+                        r,
+                    );    
                     tokio::task::yield_now().await;
-                    r
                 };
-
-                self.inner.feedback.on_response(
-                    "DeferredThread",
-                    self,
-                    &thread_info.thread,
-                    result,
-                );
             }
         }
     }
@@ -368,20 +376,19 @@ impl TaskManager {
                         // Push time elapsed
                         let start = thread_info.start;
 
-                        let result = {
+                        {
                             let r = thread_info
                                 .thread
                                 .resume((current_time - start).as_secs_f64());
-                            tokio::task::yield_now().await;
-                            r
-                        };
+                            self.inner.feedback.on_response(
+                                "WaitingThread",
+                                self,
+                                &thread_info.thread,
+                                r,
+                            );        
 
-                        self.inner.feedback.on_response(
-                            "WaitingThread",
-                            self,
-                            &thread_info.thread,
-                            result,
-                        );
+                            tokio::task::yield_now().await;
+                        }
                     }
                     WaitOp::Delay { args } => {
                         let result = {

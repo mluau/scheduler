@@ -118,6 +118,7 @@ impl Scheduler {
                     if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
                         && rx.is_empty()
                     {
+                        log::warn!("Alternative pathway triggered. This is a bug.");
                         break;
                     }
                 }

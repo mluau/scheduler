@@ -84,6 +84,7 @@ pub trait LuaSchedulerExt {
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
+        resume_after: Vec<LuaThread>,
     ) -> LuaResult<mlua::Thread>;
 
     /**
@@ -99,6 +100,7 @@ pub trait LuaSchedulerExt {
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
+        resume_after: Vec<LuaThread>,
     ) -> LuaResult<mlua::Thread>;
 }
 
@@ -114,6 +116,7 @@ impl LuaSchedulerExt for Lua {
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
+        resume_after: Vec<LuaThread>,
     ) -> LuaResult<mlua::Thread> {
         let scheduler = self
             .app_data_ref::<mlua_scheduler::TaskManager>()
@@ -122,7 +125,7 @@ impl LuaSchedulerExt for Lua {
         let thread = thread.into_lua_thread(self)?;
         let args = args.into_lua_multi(self)?;
 
-        scheduler.add_deferred_thread_front(thread.clone(), args);
+        scheduler.add_deferred_thread_front(thread.clone(), args, resume_after);
 
         Ok(thread)
     }
@@ -131,6 +134,7 @@ impl LuaSchedulerExt for Lua {
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
+        resume_after: Vec<LuaThread>,
     ) -> LuaResult<mlua::Thread> {
         let scheduler = self
             .app_data_ref::<mlua_scheduler::TaskManager>()
@@ -139,7 +143,7 @@ impl LuaSchedulerExt for Lua {
         let thread = thread.into_lua_thread(self)?;
         let args = args.into_lua_multi(self)?;
 
-        scheduler.add_deferred_thread_back(thread.clone(), args);
+        scheduler.add_deferred_thread_back(thread.clone(), args, resume_after);
 
         Ok(thread)
     }
