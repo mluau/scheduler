@@ -19,7 +19,7 @@ struct Cli {
     path: Vec<PathBuf>,
 }
 
-async fn spawn_script(lua: mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Result<()> {
+async fn spawn_script(lua: &mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Result<()> {
     let f = lua
         .load(fs::read_to_string(&path).await?)
         .set_name(fs::canonicalize(&path).await?.to_string_lossy())
@@ -100,7 +100,7 @@ fn main() {
         lua.set_app_data(thread_tracker.clone());
 
         let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
-            lua.clone(),
+            &lua,
             XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
                 thread_tracker,
                 TaskPrintError {},
@@ -110,7 +110,7 @@ fn main() {
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 
-        scheduler.attach();
+        scheduler.attach().expect("Failed to attach scheduler");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
@@ -247,7 +247,7 @@ fn main() {
         global_tab.set_metatable(Some(global_mt));
 
         for path in cli.path {
-            spawn_script(lua.clone(), path, global_tab.clone())
+            spawn_script(&lua, path, global_tab.clone())
                 .await
                 .expect("Failed to spawn script");
 
@@ -258,5 +258,10 @@ fn main() {
 
         task_mgr.stop();
         //std::process::exit(0);
+
+        let weak_lua = lua.weak();
+        drop(lua);
+
+        println!("Is Lua still alive?: {}", weak_lua.try_upgrade().is_some());
     });
 }

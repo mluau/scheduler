@@ -74,7 +74,7 @@ pub trait SchedulerFeedback {
 
 /// Inner task manager state
 pub struct TaskManagerInner {
-    pub lua: mlua::Lua,
+    pub lua: mlua::WeakLua,
     pub pending_resumes: Cell<usize>,
     pub pending_asyncs: Cell<usize>,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
@@ -95,7 +95,7 @@ pub struct TaskManager {
 impl TaskManager {
     /// Creates a new task manager
     pub fn new(
-        lua: mlua::Lua,
+        lua: &mlua::Lua,
         feedback: XRc<dyn SchedulerFeedback>,
         run_sleep_interval: Duration,
     ) -> Self {
@@ -109,17 +109,26 @@ impl TaskManager {
                 is_cancelled: Cell::new(false),
                 feedback,
                 run_sleep_interval,
-                lua,
+                lua: lua.weak(),
                 async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
             }
             .into(),
         }
     }
 
+    /// Checks if the lua state is valid
+    fn check_lua(&self) -> bool {
+        self.inner.lua.try_upgrade().is_some()
+    }
+
     /// Attaches the task manager to the lua state
-    pub fn attach(&self) {
-        self.inner.lua.set_app_data(self.clone());
+    pub fn attach(&self) -> Result<(), mlua::Error> {
+        let Some(lua) = self.inner.lua.try_upgrade() else {
+            return Err(mlua::Error::RuntimeError("Failed to upgrade lua".to_string()));
+        };
+        lua.set_app_data(self.clone());
         self.run_in_task();
+        Ok(())
     }
 
     /// Returns whether the task manager has been cancelled
@@ -207,7 +216,7 @@ impl TaskManager {
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
     async fn run(&self) {
-        if self.is_running() || self.is_cancelled() {
+        if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return; // Quick exit
         }
 
@@ -216,7 +225,7 @@ impl TaskManager {
         log::debug!("Task manager started");
 
         loop {
-            if self.is_cancelled() {
+            if self.is_cancelled() || !self.check_lua() {
                 break;
             }
 
@@ -231,7 +240,7 @@ impl TaskManager {
     /// Helper method to start up the task manager
     /// from a synchronous context
     pub fn run_in_task(&self) {
-        if self.is_running() || self.is_cancelled() {
+        if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return;
         }
 
@@ -278,6 +287,10 @@ impl TaskManager {
                     entry
                 };
 
+                if !self.check_lua() {
+                    break;
+                }
+
                 self.process_waiting_thread(entry, current_time).await;
             }
         }
@@ -311,6 +324,10 @@ impl TaskManager {
 
                     entry
                 };
+
+                if !self.check_lua() {
+                    break;
+                }
 
                 self.process_deferred_thread(entry).await;
             }

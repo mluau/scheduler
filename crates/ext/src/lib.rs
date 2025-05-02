@@ -27,9 +27,13 @@ impl Scheduler {
     /// Attaches the scheduler to the Lua state
     ///
     /// Note: this method also attaches the inner task manager itself
-    pub fn attach(&self) {
-        self.task_manager.inner.lua.set_app_data(self.clone());
-        self.task_manager.attach(); // Attach the task manager on the scheduler to the lua state
+    pub fn attach(&self) -> Result<(), mlua::Error> { 
+        let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
+            return Err(mlua::Error::external("Lua state is not valid"));
+        };
+        lua.set_app_data(self.clone());
+        self.task_manager.attach()?; // Attach the task manager on the scheduler to the lua state
+        Ok(())
     }
 
     /// Returns the scheduler given a lua
@@ -73,10 +77,11 @@ impl Scheduler {
         thread: mlua::Thread,
         args: mlua::MultiValue,
     ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
-        let ter = self
-            .task_manager
-            .inner
-            .lua
+        let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
+            return Err(mlua::Error::external("Lua state is not valid"));
+        };
+
+        let ter = lua
             .app_data_ref::<feedbacks::ThreadTracker>()
             .ok_or(mlua::Error::external(
                 "ThreadTracker not attached to Lua state",
