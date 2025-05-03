@@ -77,17 +77,19 @@ impl Scheduler {
         thread: mlua::Thread,
         args: mlua::MultiValue,
     ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
-        let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
-            return Err(mlua::Error::external("Lua state is not valid"));
-        };
+        let mut rx = {
+            let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
+                return Err(mlua::Error::external("Lua state is not valid"));
+            };
+    
+            let ter = lua
+                .app_data_ref::<feedbacks::ThreadTracker>()
+                .ok_or(mlua::Error::external(
+                    "ThreadTracker not attached to Lua state",
+                ))?;
 
-        let ter = lua
-            .app_data_ref::<feedbacks::ThreadTracker>()
-            .ok_or(mlua::Error::external(
-                "ThreadTracker not attached to Lua state",
-            ))?;
-
-        let mut rx = ter.track_thread(&thread);
+            ter.track_thread(&thread)
+        }; // Lua is dropped here
 
         let result = thread.resume(args);
 
@@ -102,6 +104,11 @@ impl Scheduler {
         loop {
             tokio::select! {
                 Some(next) = rx.recv() => {
+                    if self.task_manager.inner.lua.try_upgrade().is_none() {
+                        log::trace!("Scheduler is no longer valid, exiting...");
+                        break;
+                    }
+
                     log::trace!("Received value: {:?}", next);
                     value = Some(next);
 
@@ -114,6 +121,11 @@ impl Scheduler {
                     }
                 }
                 _ = ticker.tick() => {
+                    if self.task_manager.inner.lua.try_upgrade().is_none() {
+                        log::trace!("Scheduler is no longer valid, exiting...");
+                        break;
+                    }
+
                     if let Ok(next) = rx.try_recv() {
                         log::trace!("Received value: {:?}", next);
                         value = Some(next);
