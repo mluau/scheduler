@@ -86,7 +86,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "addDeferredFront",
         lua.create_function(
-            move |lua, (f, resume_after, args): (LuaEither<LuaFunction, LuaThread>, Vec<LuaThread>, LuaMultiValue)| {
+            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
@@ -98,7 +98,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     &th,
                 )?;
 
-                taskmgr_front_ref.add_deferred_thread_front(th.clone(), args, resume_after);
+                taskmgr_front_ref.add_deferred_thread_front(th.clone(), args);
                 Ok(th)
             },
         )?,
@@ -109,7 +109,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "addDeferredBack",
         lua.create_function(
-            move |lua, (f, resume_after, args): (LuaEither<LuaFunction, LuaThread>, Vec<LuaThread>, LuaMultiValue)| {
+            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
                     LuaEither::Left(f) => lua.create_thread(f)?,
                     LuaEither::Right(t) => t,
@@ -121,7 +121,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     &th,
                 )?;
 
-                taskmgr_back_ref.add_deferred_thread_back(th.clone(), args, resume_after);
+                taskmgr_back_ref.add_deferred_thread_back(th.clone(), args);
                 Ok(th)
             },
         )?,

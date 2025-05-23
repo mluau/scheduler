@@ -43,7 +43,6 @@ impl std::cmp::Ord for WaitingThread {
 pub struct DeferredThread {
     thread: mlua::Thread,
     args: mlua::MultiValue,
-    resume_after: Vec<mlua::Thread>,
 }
 
 pub trait SchedulerFeedback {
@@ -184,15 +183,15 @@ impl TaskManager {
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue, resume_after: Vec<mlua::Thread>) {
+    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args, resume_after });
+        self_ref.push_front(DeferredThread { thread, args });
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue, resume_after: Vec<mlua::Thread>) {
+    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args, resume_after });
+        self_ref.push_front(DeferredThread { thread, args });
     }
 
     /// Removes a deferred thread from the task manager returning the number of threads removed
@@ -304,23 +303,6 @@ impl TaskManager {
                     let Some(entry) = self_ref.pop_back() else {
                         break;
                     };
-
-                    let mut process = true;
-
-                    for resume_after in entry.resume_after.iter() {
-                        // Check if the thread is dead
-                        if resume_after.status() != mlua::ThreadStatus::Error
-                            && resume_after.status() != mlua::ThreadStatus::Finished
-                        {
-                            process = false;
-                            break;
-                        }
-                    }
-
-                    if !process {
-                        self_ref.push_back(entry);
-                        continue;
-                    }
 
                     entry
                 };

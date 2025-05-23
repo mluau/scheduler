@@ -100,45 +100,25 @@ impl Scheduler {
 
         let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
 
-        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
         loop {
-            tokio::select! {
-                Some(next) = rx.recv() => {
-                    if self.task_manager.inner.lua.try_upgrade().is_none() {
-                        log::trace!("Scheduler is no longer valid, exiting...");
-                        break;
-                    }
+            let Some(next) = rx.recv().await else {
+                break;
+            };
 
-                    log::trace!("Received value: {:?}", next);
-                    value = Some(next);
+            if self.task_manager.inner.lua.try_upgrade().is_none() {
+                log::trace!("Scheduler is no longer valid, exiting...");
+                break;
+            }
 
-                    let status = thread.status();
-                    if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
-                        && rx.is_empty()
-                    {
-                        log::trace!("Status: {:?}", status);
-                        break;
-                    }
-                }
-                _ = ticker.tick() => {
-                    if self.task_manager.inner.lua.try_upgrade().is_none() {
-                        log::trace!("Scheduler is no longer valid, exiting...");
-                        break;
-                    }
+            log::trace!("Received value: {:?}", next);
+            value = Some(next);
 
-                    if let Ok(next) = rx.try_recv() {
-                        log::trace!("Received value: {:?}", next);
-                        value = Some(next);
-                    }
-
-                    let status = thread.status();
-                    if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
-                        && rx.is_empty()
-                    {
-                        log::warn!("Alternative pathway triggered. This is a bug.");
-                        break;
-                    }
-                }
+            let status = thread.status();
+            if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+                && rx.is_empty()
+            {
+                log::trace!("Status: {:?}", status);
+                break;
             }
         }
 
