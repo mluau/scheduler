@@ -3,7 +3,6 @@ use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
 use mlua_scheduler_ext::Scheduler;
-use std::cell::Cell;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
 
@@ -47,16 +46,7 @@ fn main() {
 
     println!("Running script: {:?}", cli.path);
 
-    // Create tokio runtime and use spawn_local
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .worker_threads(10)
-        .build()
-        .unwrap();
-
-    let local = tokio::task::LocalSet::new();
-
-    local.block_on(&rt, async {
+    let async_closure = async {
         let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
             .expect("Failed to create Lua");
 
@@ -121,7 +111,7 @@ fn main() {
                 "_TEST_ASYNC_WORK",
                 lua.create_scheduler_async_function(|lua, n: u64| async move {
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    lua.create_table()
+                    Ok(())
                 })
                 .expect("Failed to create async function"),
             )
@@ -263,5 +253,30 @@ fn main() {
         drop(lua);
 
         println!("Is Lua still alive?: {}", weak_lua.try_upgrade().is_some());
-    });
+    };
+
+    #[cfg(not(feature = "send"))]
+    {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .worker_threads(10)
+            .build()
+            .unwrap();
+
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async_closure);
+    }
+    #[cfg(feature = "send")]
+    {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        // Still needs to be in a LocalSet. 
+        // The lua vm should be pinned to a thread when there is any chance of multiple vm's accessing it
+        // at the same time (or use a tokio sync mutex)
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async_closure);
+    }
 }

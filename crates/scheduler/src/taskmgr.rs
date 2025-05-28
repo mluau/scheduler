@@ -247,6 +247,11 @@ impl TaskManager {
 
         let self_ref = self.clone();
 
+        #[cfg(feature = "send")]
+        tokio::task::spawn(async move {
+            self_ref.run().await;
+        });
+        #[cfg(not(feature = "send"))]
         tokio::task::spawn_local(async move {
             self_ref.run().await;
         });
