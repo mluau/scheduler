@@ -1,4 +1,4 @@
-use crate::{XRc, XRefCell};
+use crate::{XRc, XRefCell, XBool, XUsize};
 use std::cell::Cell;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
@@ -45,7 +45,7 @@ pub struct DeferredThread {
     args: mlua::MultiValue,
 }
 
-pub trait SchedulerFeedback {
+pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
     /// Function that is called whenever a thread is added/known to the task manager
     ///
     /// Contains both the creator thread and the thread that was added
@@ -74,12 +74,12 @@ pub trait SchedulerFeedback {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pub lua: mlua::WeakLua,
-    pub pending_resumes: Cell<usize>,
-    pub pending_asyncs: Cell<usize>,
+    pub pending_resumes: XUsize,
+    pub pending_asyncs: XUsize,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
-    pub is_running: Cell<bool>,
-    pub is_cancelled: Cell<bool>,
+    pub is_running: XBool,
+    pub is_cancelled: XBool,
     pub feedback: XRc<dyn SchedulerFeedback>,
     pub run_sleep_interval: Duration,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
@@ -100,12 +100,12 @@ impl TaskManager {
     ) -> Self {
         Self {
             inner: TaskManagerInner {
-                pending_resumes: Cell::new(0),
-                pending_asyncs: Cell::new(0),
+                pending_resumes: XUsize::new(0),
+                pending_asyncs: XUsize::new(0),
                 waiting_queue: XRefCell::new(BinaryHeap::default()),
                 deferred_queue: XRefCell::new(VecDeque::default()),
-                is_running: Cell::new(false),
-                is_cancelled: Cell::new(false),
+                is_running: XBool::new(false),
+                is_cancelled: XBool::new(false),
                 feedback,
                 run_sleep_interval,
                 lua: lua.weak(),

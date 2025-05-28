@@ -146,6 +146,9 @@ where
         let inner = taskmgr.inner.clone();
         let mut async_executor = inner.async_task_executor.borrow_mut();
 
+        #[cfg(feature = "send")]
+        async_executor.spawn(fut(taskmgr, lua.weak(), th, args, func_ref));
+        #[cfg(not(feature = "send"))]
         async_executor.spawn_local(fut(taskmgr, lua.weak(), th, args, func_ref));
 
         Ok(())

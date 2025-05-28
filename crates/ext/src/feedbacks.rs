@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell};
+use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell, XId, MaybeSend, MaybeSync};
 
 /// Chain 2 feedbacks together
 pub struct ChainFeedback<T: SchedulerFeedback, U: SchedulerFeedback>(pub T, pub U);
@@ -44,7 +44,7 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
 ///
 /// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
 /// can be more efficient
-pub trait ThreadAddMiddleware {
+pub trait ThreadAddMiddleware: MaybeSend + MaybeSync {
     fn on_thread_add(
         &self,
         label: &str,
@@ -87,22 +87,13 @@ impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
     }
 }
 
-#[derive(Hash, Eq, PartialEq)]
-pub struct ThreadPtr(*const std::ffi::c_void);
-
-impl ThreadPtr {
-    pub fn new(thread: &mlua::Thread) -> Self {
-        Self(thread.to_pointer())
-    }
-}
-
 /// Tracks the threads known to the scheduler to the thread which initiated them
 #[derive(Clone)]
 pub struct ThreadTracker {
     #[allow(clippy::type_complexity)]
     pub returns: XRc<
         XRefCell<
-            HashMap<ThreadPtr, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>,
+            HashMap<XId, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>,
         >,
     >,
 }
@@ -128,7 +119,7 @@ impl ThreadTracker {
         th: &mlua::Thread,
     ) -> tokio::sync::mpsc::UnboundedReceiver<mlua::Result<mlua::MultiValue>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.returns.borrow_mut().insert(ThreadPtr::new(th), tx);
+        self.returns.borrow_mut().insert(XId::from_ptr(th.to_pointer()), tx);
 
         rx
     }
@@ -136,7 +127,7 @@ impl ThreadTracker {
     /// Push a result to the tracked thread
     pub fn push_result(&self, th: &mlua::Thread, result: mlua::Result<mlua::MultiValue>) {
         log::trace!("ThreadTracker: Pushing result to thread {:?}", th);
-        if let Some(tx) = self.returns.borrow().get(&ThreadPtr::new(th)) {
+        if let Some(tx) = self.returns.borrow().get(&XId::from_ptr(th.to_pointer())) {
             let _ = tx.send(result);
         } else {
             log::warn!("ThreadTracker: No sender found for thread {:?}", th);
@@ -162,7 +153,7 @@ impl SchedulerFeedback for ThreadTracker {
         result: Result<mlua::MultiValue, mlua::Error>,
     ) {
         log::trace!("ThreadTracker: {:?} from {}", result, _label);
-        if let Some(tx) = self.returns.borrow_mut().get(&ThreadPtr::new(th)) {
+        if let Some(tx) = self.returns.borrow_mut().get(&XId::from_ptr(th.to_pointer())) {
             let _ = tx.send(result);
         }
     }
