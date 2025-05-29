@@ -94,13 +94,14 @@ impl CoreScheduler {
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return; // Quick exit
         }
+    
+        self.is_running.set(true);
 
         loop {
             if self.is_cancelled() || !self.check_lua() {
                 self.is_running.set(false);
                 return;
             }
-
 
             tokio::select! {
                 Some(event) = rx.recv() => {
