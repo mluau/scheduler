@@ -174,7 +174,7 @@ coroutine.create = coroutineCreate
 coroutine.resume = coroutineResume
 
 local function defer<T...>(task: Task<T...>, ...: T...): thread
-    return table.addDeferred(task, {}, ...)
+    return table.addDeferred(task, ...)
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread

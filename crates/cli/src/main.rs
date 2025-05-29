@@ -94,12 +94,22 @@ fn main() {
                 thread_tracker,
                 TaskPrintError {},
             )),
-            std::time::Duration::from_millis(1),
         );
 
         let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
 
         scheduler.attach().expect("Failed to attach scheduler");
+
+        let ref_a = task_mgr.clone();
+        tokio::task::spawn_local(async move {
+            let (tx, mut rx) = tokio::sync::broadcast::channel(100);
+            ref_a.run_in_task(rx);
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1));
+            loop {
+                ticker.tick().await;
+                let _ = tx.send(());
+            }
+        });
 
         lua.globals()
             .set("_OS", OS.to_lowercase())

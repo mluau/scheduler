@@ -1,7 +1,8 @@
 use tokio_util::time::DelayQueue;
 use tokio_util::time::delay_queue::Key as DelayQueueKey;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
 use crate::{XRc, XBool, XRefCell, XId, XUsize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashSet, HashMap, VecDeque};
 use futures_util::stream::StreamExt;
 use mlua::IntoLuaMulti;
 use mlua::prelude::LuaResult;
@@ -16,6 +17,7 @@ pub struct WaitingThread {
 pub struct DeferredThread {
     thread: mlua::Thread,
     args: mlua::MultiValue,
+    xid: crate::XId,
 }
 
 pub enum SchedulerEvent {
@@ -36,7 +38,8 @@ pub enum SchedulerEvent {
     CancelDeferredThread {
         xid: crate::XId,
     },
-    Clear {}
+    Clear {},
+    Close {}
 }
 
 pub struct CoreScheduler {
@@ -46,6 +49,7 @@ pub struct CoreScheduler {
     // Status flags
     pub is_running: XBool,
     pub is_cancelled: XBool,
+    pub wait_count: XUsize,
 
     tx: tokio::sync::mpsc::UnboundedSender<SchedulerEvent>,
     rx: XRefCell<Option<tokio::sync::mpsc::UnboundedReceiver<SchedulerEvent>>>,
@@ -67,6 +71,7 @@ impl CoreScheduler {
             feedback,
             is_running: XBool::new(false),
             is_cancelled: XBool::new(false),
+            wait_count: XUsize::new(0),
             tx,
             rx: XRefCell::new(Some(rx)),
             pending_asyncs: XUsize::new(0),
@@ -80,8 +85,8 @@ impl CoreScheduler {
 
         let mut wait_queue: DelayQueue<WaitingThread> = DelayQueue::new();
         let mut wait_keys: HashMap<XId, Vec<DelayQueueKey>> = HashMap::new();
-        let mut deferred_queue: VecDeque<DeferredThread> = VecDeque::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        let mut deferred_queue: (UnboundedSender<DeferredThread>, UnboundedReceiver<DeferredThread>) = unbounded_channel();
+        let mut known_deferred_threads: HashSet<XId> = HashSet::new();
 
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return; // Quick exit
@@ -108,85 +113,75 @@ impl CoreScheduler {
                                 duration
                             );
                             wait_keys.entry(xid).or_default().push(key);
+                            self.wait_count.set(self.wait_count.get() + 1);
                         },
                         SchedulerEvent::DeferredThread { thread, args } => {
                             let xid = XId::from_ptr(thread.to_pointer());
-                            deferred_queue.push_back(DeferredThread {
+                            let _ = deferred_queue.0.send(DeferredThread {
                                 thread,
-                                args
+                                args,
+                                xid: xid.clone()
                             });
+                            known_deferred_threads.insert(xid);
                         },
                         SchedulerEvent::CancelWaitThread { xid } => {
                             if let Some(keys) = wait_keys.get(&xid) {
                                 for key in keys {
                                     wait_queue.remove(key);
+                                    self.wait_count.set(self.wait_count.get() - 1);
                                 }
                                 wait_keys.remove(&xid);
                             };
                         }
                         SchedulerEvent::CancelDeferredThread { xid } => {
-                            deferred_queue.retain(|x| {
-                                if crate::XId::from_ptr(x.thread.to_pointer()) != xid {
-                                    true
-                                } else {
-                                    false
-                                }
-                            });
+                            known_deferred_threads.remove(&xid);
                         }
                         SchedulerEvent::Clear {} => {
-                            deferred_queue.clear();
                             wait_queue.clear();
                             wait_keys.clear();
+                            while let Some(_) = deferred_queue.1.recv().await {}
+                        }
+                        SchedulerEvent::Close {} => {
+                            self.is_running.set(false);
+                            return;
                         }
                     }
                 },
-                _ = interval.tick() => {
-                    if self.is_cancelled() || !self.check_lua() {
+                Some(value) = wait_queue.next() => {
+                    let Some(lua) = self.lua.try_upgrade() else {
                         self.is_running.set(false);
-                        return;
+                        return
+                    };
+
+                    let current_time = std::time::Instant::now();
+
+                    let key = value.key();
+                    let inner = value.into_inner();
+                    let xid = XId::from_ptr(inner.thread.to_pointer());
+                    if let Err(e) = self.process_waiting_thread(&lua, inner, current_time) {
+                        log::error!("Wait queue fail: {:?}", e);
                     }
 
-                    if !wait_queue.is_empty() {
-                        // Flush out the wait queue
-                        let current_time = std::time::Instant::now();
-                        while let Some(value) = wait_queue.next().await {
-                            let Some(lua) = self.lua.try_upgrade() else {
-                                return
-                            };
-
-                            let key = value.key();
-                            let inner = value.into_inner();
-                            let xid = XId::from_ptr(inner.thread.to_pointer());
-                            if let Err(e) = self.process_waiting_thread(&lua, inner, current_time).await {
-                                log::error!("Wait queue fail: {:?}", e);
-                            }
-
-                            if wait_keys.contains_key(&xid) {
-                                if let Some(old_keys) = wait_keys.remove(&xid) {
-                                    let mut new_keys = Vec::with_capacity(old_keys.len());
-                                    for nkey in old_keys {
-                                        if nkey == key {
-                                            continue;
-                                        }
-
-                                        new_keys.push(nkey);
-                                    }
-
-                                    wait_keys.insert(xid, new_keys);
+                    if wait_keys.contains_key(&xid) {
+                        if let Some(old_keys) = wait_keys.remove(&xid) {
+                            let mut new_keys = Vec::with_capacity(old_keys.len());
+                            for nkey in old_keys {
+                                if nkey == key {
+                                    continue;
                                 }
+
+                                new_keys.push(nkey);
                             }
+
+                            wait_keys.insert(xid, new_keys);
                         }
                     }
 
-                    if !deferred_queue.is_empty() {
-                        while let Some(value) = deferred_queue.pop_back() {
-                            if self.is_cancelled() || !self.check_lua() {
-                                self.is_running.set(false);
-                                break;
-                            }
-
-                            self.process_deferred_thread(value).await;
-                        }
+                    self.wait_count.set(self.wait_count.get() - 1);
+                }
+                Some(deferred_thread) = deferred_queue.1.recv() => {
+                    if known_deferred_threads.contains(&deferred_thread.xid) {
+                        self.process_deferred_thread(deferred_thread);
                     }
                 }
             }
@@ -194,7 +189,7 @@ impl CoreScheduler {
     }
 
     /// Processes a waiting thread
-    async fn process_waiting_thread(
+    fn process_waiting_thread(
         &self,
         lua: &mlua::Lua,
         thread_info: WaitingThread,
@@ -214,7 +209,6 @@ impl CoreScheduler {
                     let r = thread_info
                         .thread
                         .resume(args);
-                    //tokio::task::yield_now().await;
 
                     self.feedback.on_response(
                         "WaitingThread",
@@ -229,7 +223,7 @@ impl CoreScheduler {
     }
 
     /// Processes a deferred thread.
-    async fn process_deferred_thread(&self, thread_info: DeferredThread) {
+    fn process_deferred_thread(&self, thread_info: DeferredThread) {
         /*
             if coroutine.status(data.thread) ~= "dead" then
                resume_with_error_check(data.thread, table.unpack(data.args))
@@ -241,7 +235,6 @@ impl CoreScheduler {
                 //log::debug!("Trying to resume deferred thread");
                 {
                     let r = thread_info.thread.resume(thread_info.args);
-                    //tokio::task::yield_now().await;
                     self.feedback.on_response(
                         "DeferredThread",
                         &thread_info.thread,

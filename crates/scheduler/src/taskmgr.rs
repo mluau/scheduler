@@ -80,7 +80,6 @@ pub struct TaskManagerInner {
     pub is_cancelled: XBool,
     pub feedback: XRc<dyn SchedulerFeedback>,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
-    pub run_sleep_interval: std::time::Duration
 }
 
 #[derive(Clone)]
@@ -97,7 +96,6 @@ impl TaskManager {
     pub fn new(
         lua: &mlua::Lua,
         feedback: XRc<dyn SchedulerFeedback>,
-        run_sleep_interval: Duration,
     ) -> Self {
         #[cfg(feature = "v2_taskmgr")]
         {
@@ -115,7 +113,6 @@ impl TaskManager {
                     is_running: XBool::new(false),
                     is_cancelled: XBool::new(false),
                     feedback,
-                    run_sleep_interval,
                     lua: lua.weak(),
                     async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
                 }
@@ -134,13 +131,12 @@ impl TaskManager {
         self.inner.lua.try_upgrade()
     }
 
-    /// Attaches the task manager to the lua state
+    /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
     pub fn attach(&self) -> Result<(), mlua::Error> {
         let Some(lua) = self.get_lua() else {
             return Err(mlua::Error::RuntimeError("Failed to upgrade lua".to_string()));
         };
         lua.set_app_data(self.clone());
-        self.run_in_task();
         Ok(())
     }
 
@@ -269,7 +265,7 @@ impl TaskManager {
     /// Runs the task manager
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
-    async fn run(&self) {
+    async fn run(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
         #[cfg(feature = "v2_taskmgr")]
         {
             self.inner.run().await
@@ -291,7 +287,7 @@ impl TaskManager {
 
                 self.process().await;
 
-                tokio::time::sleep(self.inner.run_sleep_interval).await;
+                let _ = ticker.recv().await;
             }
 
             self.inner.is_running.set(false)
@@ -300,7 +296,7 @@ impl TaskManager {
 
     /// Helper method to start up the task manager
     /// from a synchronous context
-    pub fn run_in_task(&self) {
+    pub fn run_in_task(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return;
         }
@@ -311,11 +307,11 @@ impl TaskManager {
 
         #[cfg(feature = "send")]
         tokio::task::spawn(async move {
-            self_ref.run().await;
+            self_ref.run(ticker).await;
         });
         #[cfg(not(feature = "send"))]
         tokio::task::spawn_local(async move {
-            self_ref.run().await;
+            self_ref.run(ticker).await;
         });
     }
 
@@ -499,7 +495,7 @@ impl TaskManager {
     /// Returns the waiting queue length
     pub fn waiting_len(&self) -> usize {
         #[cfg(feature = "v2_taskmgr")]
-        { 0 } // todo
+        { self.inner.wait_count.get() }
         #[cfg(not(feature = "v2_taskmgr"))]
         self.inner.waiting_queue.borrow().len()
     }
@@ -532,11 +528,11 @@ impl TaskManager {
     /// Waits until the task manager is done
     pub async fn wait_till_done(&self, sleep_interval: Duration) {
         while !self.is_cancelled() {
+            tokio::time::sleep(sleep_interval).await;
+
             if self.is_empty() {
                 break;
             }
-
-            tokio::time::sleep(sleep_interval).await;
         }
     }
 }

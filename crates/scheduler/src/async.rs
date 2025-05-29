@@ -15,7 +15,8 @@ where
 local luacall = ...
 
 local function callback(...)
-    luacall(coroutine.running(), ...)
+    local callbackArgs = ...
+    luacall(coroutine.running(), callbackArgs)
     return coroutine.yield()
 end
 

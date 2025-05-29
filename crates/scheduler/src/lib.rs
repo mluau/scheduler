@@ -1,8 +1,10 @@
 mod r#async;
 pub mod taskmgr;
-pub mod taskmgr_v2;
 pub mod userdata;
 pub mod task;
+
+#[cfg(feature = "v2_taskmgr")]
+pub mod taskmgr_v2;
 
 pub use r#async::LuaSchedulerAsync;
 pub use taskmgr::TaskManager;
