@@ -14,4 +14,5 @@ env_logger = "0.11"
 [features]
 default = []
 ncg = ["mlua/luau-jit"]
+v2_taskmgr = ["mlua_scheduler/v2_taskmgr"]
 send = ["mlua_scheduler/send", "tokio/rt-multi-thread"]

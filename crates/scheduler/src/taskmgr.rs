@@ -63,7 +63,6 @@ pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
     fn on_response(
         &self,
         _label: &str,
-        _tm: &TaskManager,
         _th: &mlua::Thread,
         _result: mlua::Result<mlua::MultiValue>,
     ) {
@@ -74,21 +73,23 @@ pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
 /// Inner task manager state
 pub struct TaskManagerInner {
     pub lua: mlua::WeakLua,
-    pub pending_resumes: XUsize,
     pub pending_asyncs: XUsize,
     pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
     pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
     pub is_running: XBool,
     pub is_cancelled: XBool,
     pub feedback: XRc<dyn SchedulerFeedback>,
-    pub run_sleep_interval: Duration,
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
+    pub run_sleep_interval: std::time::Duration
 }
 
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
-    pub inner: XRc<TaskManagerInner>,
+    #[cfg(feature = "v2_taskmgr")]
+    pub(crate) inner: XRc<crate::taskmgr_v2::CoreScheduler>,
+    #[cfg(not(feature = "v2_taskmgr"))]
+    pub(crate) inner: XRc<TaskManagerInner>,
 }
 
 impl TaskManager {
@@ -98,20 +99,28 @@ impl TaskManager {
         feedback: XRc<dyn SchedulerFeedback>,
         run_sleep_interval: Duration,
     ) -> Self {
-        Self {
-            inner: TaskManagerInner {
-                pending_resumes: XUsize::new(0),
-                pending_asyncs: XUsize::new(0),
-                waiting_queue: XRefCell::new(BinaryHeap::default()),
-                deferred_queue: XRefCell::new(VecDeque::default()),
-                is_running: XBool::new(false),
-                is_cancelled: XBool::new(false),
-                feedback,
-                run_sleep_interval,
-                lua: lua.weak(),
-                async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            Self {
+                inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), feedback).into()
             }
-            .into(),
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            Self {
+                inner: TaskManagerInner {
+                    pending_asyncs: XUsize::new(0),
+                    waiting_queue: XRefCell::new(BinaryHeap::default()),
+                    deferred_queue: XRefCell::new(VecDeque::default()),
+                    is_running: XBool::new(false),
+                    is_cancelled: XBool::new(false),
+                    feedback,
+                    run_sleep_interval,
+                    lua: lua.weak(),
+                    async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
+                }
+                .into(),
+            }
         }
     }
 
@@ -120,9 +129,14 @@ impl TaskManager {
         self.inner.lua.try_upgrade().is_some()
     }
 
+    /// Tries to get strong ref to lua
+    pub fn get_lua(&self) -> Option<mlua::Lua> {
+        self.inner.lua.try_upgrade()
+    }
+
     /// Attaches the task manager to the lua state
     pub fn attach(&self) -> Result<(), mlua::Error> {
-        let Some(lua) = self.inner.lua.try_upgrade() else {
+        let Some(lua) = self.get_lua() else {
             return Err(mlua::Error::RuntimeError("Failed to upgrade lua".to_string()));
         };
         lua.set_app_data(self.clone());
@@ -145,95 +159,143 @@ impl TaskManager {
         &*self.inner.feedback
     }
 
+    pub fn incr_async(&self) {
+        let current_pending = self.inner.pending_asyncs.get();
+        self.inner.pending_asyncs.set(current_pending + 1);
+    }
+
+    pub fn decr_async(&self) {
+        let current_pending = self.inner.pending_asyncs.get();
+        self.inner.pending_asyncs.set(current_pending - 1);
+    }
+
     /// Adds a waiting thread to the task manager
     pub fn add_waiting_thread(
         &self,
         thread: mlua::Thread,
-        op: WaitOp,
+        delay_args: Option<mlua::MultiValue>,
         duration: std::time::Duration,
     ) {
-        log::trace!("Trying to add thread to waiting queue");
-        let mut self_ref = self.inner.waiting_queue.borrow_mut();
-        let start = std::time::Instant::now();
-        let wake_at = start + duration;
-        self_ref.push(WaitingThread {
-            thread,
-            op,
-            start,
-            wake_at,
-        });
-        log::trace!("Added thread to waiting queue");
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::Wait {
+                delay_args,
+                thread,
+                duration,
+                start_at: std::time::Instant::now()
+            });
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            let op = match delay_args {
+                Some(delay_args) => WaitOp::Delay { args: delay_args },
+                None => WaitOp::Wait
+            };
+
+            log::trace!("Trying to add thread to waiting queue");
+            let mut self_ref = self.inner.waiting_queue.borrow_mut();
+            let start = std::time::Instant::now();
+            let wake_at = start + duration;
+            self_ref.push(WaitingThread {
+                thread,
+                op,
+                start,
+                wake_at,
+            });
+            log::trace!("Added thread to waiting queue");
+        }
     }
 
-    /// Removes a waiting thread from the task manager returning the number of threads removed
-    pub fn remove_waiting_thread(&self, thread: &mlua::Thread) -> u64 {
-        let mut self_ref = self.inner.waiting_queue.borrow_mut();
+    /// Removes a waiting thread from the task manager
+    pub fn remove_waiting_thread(&self, thread: &mlua::Thread) {
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::CancelWaitThread {
+                xid: crate::XId::from_ptr(thread.to_pointer())
+            });
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
-        let mut removed = 0;
-        self_ref.retain(|x| {
-            if x.thread != *thread {
-                true
-            } else {
-                removed += 1;
-                false
-            }
-        });
-
-        removed
+            self_ref.retain(|x| {
+                if x.thread != *thread {
+                    true
+                } else {
+                    false
+                }
+            });
+        }
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_front(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args });
+    pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread {
+                args,
+                thread,
+            });
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            let mut self_ref = self.inner.deferred_queue.borrow_mut();
+            self_ref.push_back(DeferredThread { thread, args });
+        }
     }
 
-    /// Adds a deferred thread to the task manager to the front of the queue
-    pub fn add_deferred_thread_back(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        let mut self_ref = self.inner.deferred_queue.borrow_mut();
-        self_ref.push_front(DeferredThread { thread, args });
-    }
+    /// Removes a deferred thread from the task manager
+    pub fn remove_deferred_thread(&self, thread: &mlua::Thread) {
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::CancelDeferredThread {
+                xid: crate::XId::from_ptr(thread.to_pointer())
+            });
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            let mut self_ref = self.inner.deferred_queue.borrow_mut();
 
-    /// Removes a deferred thread from the task manager returning the number of threads removed
-    pub fn remove_deferred_thread(&self, thread: &mlua::Thread) -> u64 {
-        let mut self_ref = self.inner.deferred_queue.borrow_mut();
-
-        let mut removed = 0;
-        self_ref.retain(|x| {
-            if x.thread != *thread {
-                true
-            } else {
-                removed += 1;
-                false
-            }
-        });
-
-        removed
+            self_ref.retain(|x| {
+                if x.thread != *thread {
+                    true
+                } else {
+                    false
+                }
+            });
+        }
     }
 
     /// Runs the task manager
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
     async fn run(&self) {
-        if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            return; // Quick exit
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.run().await
         }
-
-        self.inner.is_running.set(true);
-
-        log::debug!("Task manager started");
-
-        loop {
-            if self.is_cancelled() || !self.check_lua() {
-                break;
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            if self.is_running() || self.is_cancelled() || !self.check_lua() {
+                return; // Quick exit
             }
 
-            self.process().await;
+            self.inner.is_running.set(true);
 
-            tokio::time::sleep(self.inner.run_sleep_interval).await;
+            log::debug!("Task manager started");
+
+            loop {
+                if self.is_cancelled() || !self.check_lua() {
+                    break;
+                }
+
+                self.process().await;
+
+                tokio::time::sleep(self.inner.run_sleep_interval).await;
+            }
+
+            self.inner.is_running.set(false)
         }
-
-        self.inner.is_running.set(false)
     }
 
     /// Helper method to start up the task manager
@@ -258,7 +320,8 @@ impl TaskManager {
     }
 
     /// Processes the task manager
-    pub async fn process(&self) {
+    #[cfg(not(feature = "v2_taskmgr"))]
+    async fn process(&self) {
         /*log::debug!(
             "Queue Length: {}, Running: {}",
             self.inner.len(),
@@ -336,7 +399,6 @@ impl TaskManager {
                     let r = thread_info.thread.resume(thread_info.args);
                     self.inner.feedback.on_response(
                         "DeferredThread",
-                        self,
                         &thread_info.thread,
                         r,
                     );    
@@ -386,7 +448,6 @@ impl TaskManager {
                                 .resume((current_time - start).as_secs_f64());
                             self.inner.feedback.on_response(
                                 "WaitingThread",
-                                self,
                                 &thread_info.thread,
                                 r,
                             );        
@@ -403,7 +464,6 @@ impl TaskManager {
 
                         self.inner.feedback.on_response(
                             "DelayedThread",
-                            self,
                             &thread_info.thread,
                             result,
                         );
@@ -425,23 +485,31 @@ impl TaskManager {
 
     /// Clears the task manager queues completely
     pub fn clear(&self) {
-        self.inner.waiting_queue.borrow_mut().clear();
-        self.inner.deferred_queue.borrow_mut().clear();
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
+        {
+            self.inner.waiting_queue.borrow_mut().clear();
+            self.inner.deferred_queue.borrow_mut().clear();
+        }
     }
 
     /// Returns the waiting queue length
     pub fn waiting_len(&self) -> usize {
+        #[cfg(feature = "v2_taskmgr")]
+        { 0 } // todo
+        #[cfg(not(feature = "v2_taskmgr"))]
         self.inner.waiting_queue.borrow().len()
     }
 
     /// Returns the deferred queue length
     pub fn deferred_len(&self) -> usize {
+        #[cfg(feature = "v2_taskmgr")]
+        { 0 } // todo
+        #[cfg(not(feature = "v2_taskmgr"))]
         self.inner.deferred_queue.borrow().len()
-    }
-
-    /// Returns the pending resumes length
-    pub fn pending_resumes_len(&self) -> usize {
-        self.inner.pending_resumes.get()
     }
 
     /// Returns the pending asyncs length
@@ -453,7 +521,6 @@ impl TaskManager {
     pub fn len(&self) -> usize {
         self.waiting_len()
             + self.deferred_len()
-            + self.pending_resumes_len()
             + self.pending_asyncs_len()
     }
 

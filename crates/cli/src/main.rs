@@ -74,7 +74,6 @@ fn main() {
             fn on_response(
                 &self,
                 _label: &str,
-                _tm: &mlua_scheduler::TaskManager,
                 _th: &mlua::Thread,
                 result: mlua::Result<mlua::MultiValue>,
             ) {

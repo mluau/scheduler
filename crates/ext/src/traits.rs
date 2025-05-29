@@ -72,30 +72,15 @@ pub trait LuaSchedulerExt {
     fn set_exit_code(&self, code: u8);
 
     /**
-        Adds a lua thread to the **front** of the current schedulers deferred thread queue.
+        Adds a lua thread to the current schedulers deferred thread queue.
 
-        See [`TaskManager::add_deferred_thread_front`] for more information.
-
-        # Panics
-
-        Panics if called outside of a running [`mlua_scheduler::TaskManager`].
-    */
-    fn push_thread_front(
-        &self,
-        thread: impl IntoLuaThread,
-        args: impl IntoLuaMulti,
-    ) -> LuaResult<mlua::Thread>;
-
-    /**
-        Adds a lua thread to the **front** of the current schedulers deferred thread queue.
-
-        See [`TaskManager::add_deferred_thread_front`] for more information.
+        See [`TaskManager::add_deferred_thread`] for more information.
 
         # Panics
 
         Panics if called outside of a running [`mlua_scheduler::TaskManager`].
     */
-    fn push_thread_back(
+    fn push_thread(
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
@@ -110,7 +95,7 @@ impl LuaSchedulerExt for Lua {
         scheduler.exit_with_code(code);
     }
 
-    fn push_thread_front(
+    fn push_thread(
         &self,
         thread: impl IntoLuaThread,
         args: impl IntoLuaMulti,
@@ -122,24 +107,7 @@ impl LuaSchedulerExt for Lua {
         let thread = thread.into_lua_thread(self)?;
         let args = args.into_lua_multi(self)?;
 
-        scheduler.add_deferred_thread_front(thread.clone(), args);
-
-        Ok(thread)
-    }
-
-    fn push_thread_back(
-        &self,
-        thread: impl IntoLuaThread,
-        args: impl IntoLuaMulti,
-    ) -> LuaResult<mlua::Thread> {
-        let scheduler = self
-            .app_data_ref::<mlua_scheduler::TaskManager>()
-            .expect("No task manager attached");
-
-        let thread = thread.into_lua_thread(self)?;
-        let args = args.into_lua_multi(self)?;
-
-        scheduler.add_deferred_thread_back(thread.clone(), args);
+        scheduler.add_deferred_thread(thread.clone(), args);
 
         Ok(thread)
     }

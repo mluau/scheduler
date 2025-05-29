@@ -20,7 +20,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
             let curr_thread = lua.current_thread();
 
-            taskmgr_wq_ref.inner.feedback.on_thread_add(
+            taskmgr_wq_ref.feedback().on_thread_add(
                 "WaitingThread.WaitSemantics",
                 &curr_thread,
                 &th,
@@ -28,7 +28,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
             taskmgr_wq_ref.add_waiting_thread(
                 th,
-                super::taskmgr::WaitOp::Wait,
+                None,
                 std::time::Duration::from_secs_f64(resume),
             );
             Ok(())
@@ -56,7 +56,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(t) => t,
                 };
 
-                taskmgr_delay_ref.inner.feedback.on_thread_add(
+                taskmgr_delay_ref.feedback().on_thread_add(
                     "WaitingThread.DelaySemantics",
                     &lua.current_thread(),
                     &th,
@@ -64,7 +64,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
                 taskmgr_delay_ref.add_waiting_thread(
                     th.clone(),
-                    super::taskmgr::WaitOp::Delay { args },
+                    Some(args),
                     std::time::Duration::from_secs_f64(resume),
                 );
                 Ok(th)
@@ -81,33 +81,10 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
         })?,
     )?;
 
-    // Adds a thread to the deferred queue at the front
-    let taskmgr_front_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "addDeferredFront",
-        lua.create_function(
-            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
-                let th = match f {
-                    LuaEither::Left(f) => lua.create_thread(f)?,
-                    LuaEither::Right(t) => t,
-                };
-
-                taskmgr_front_ref.inner.feedback.on_thread_add(
-                    "DeferredThread",
-                    &lua.current_thread(),
-                    &th,
-                )?;
-
-                taskmgr_front_ref.add_deferred_thread_front(th.clone(), args);
-                Ok(th)
-            },
-        )?,
-    )?;
-
-    // Adds a thread to the deferred queue at the back
+    // Adds a thread to the deferred queue
     let taskmgr_back_ref = taskmgr_parent.clone();
     scheduler_tab.set(
-        "addDeferredBack",
+        "addDeferred",
         lua.create_function(
             move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
                 let th = match f {
@@ -115,13 +92,13 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(t) => t,
                 };
 
-                taskmgr_back_ref.inner.feedback.on_thread_add(
+                taskmgr_back_ref.feedback().on_thread_add(
                     "DeferredThread",
                     &lua.current_thread(),
                     &th,
                 )?;
 
-                taskmgr_back_ref.add_deferred_thread_back(th.clone(), args);
+                taskmgr_back_ref.add_deferred_thread(th.clone(), args);
                 Ok(th)
             },
         )?,
@@ -140,7 +117,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
         "onThreadAdd",
         lua.create_function(move |lua, (label, th): (String, LuaThread)| {
             let taskmgr = super::taskmgr::get(lua);
-            taskmgr.inner.feedback.on_thread_add(&label, &lua.current_thread(), &th)
+            taskmgr.feedback().on_thread_add(&label, &lua.current_thread(), &th)
             .map_err(LuaError::external)?;
             Ok(())
         })?,
@@ -150,7 +127,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "onResponseOk",
         lua.create_function(move |lua, (label, th, result): (String, LuaThread, LuaMultiValue)| {
-            taskmgr.inner.feedback.on_response(&label, &taskmgr, &th, Ok(result));
+            taskmgr.feedback().on_response(&label, &th, Ok(result));
             Ok(())
         })?,
     )?;
@@ -159,7 +136,7 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "onResponseErr",
         lua.create_function(move |lua, (label, th, result): (String, LuaThread, LuaError)| {
-            taskmgr.inner.feedback.on_response(&label, &taskmgr, &th, Err(result));
+            taskmgr.feedback().on_response(&label, &th, Err(result));
             Ok(())
         })?,
     )?;
@@ -197,7 +174,7 @@ coroutine.create = coroutineCreate
 coroutine.resume = coroutineResume
 
 local function defer<T...>(task: Task<T...>, ...: T...): thread
-    return table.addDeferredFront(task, {}, ...)
+    return table.addDeferred(task, {}, ...)
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
@@ -229,24 +206,6 @@ local function spawn(task: TaskFunction, ...: any): thread
     return thread
 end
 
-local function resumeafter<T...>(task: Task<T...>)
-    if type(task) ~= "thread" then
-        error("task must be a thread")
-    end
-    table.addDeferredBack(coroutine.running(), {task}, nil)
-    return coroutine.yield()
-end
-
-local function resumeafterall<T...>(tasks: {Task<T...>})
-    if type(tasks) ~= "table" then
-        error("tasks must be a table")
-    end
-    if #tasks == 0 then
-        return coroutine.running()
-    end
-    table.addDeferredBack(coroutine.running(), tasks, nil)
-end
-
 return {
     defer = defer,
     delay = delay,
@@ -255,10 +214,6 @@ return {
     wait = wait,
     cancel = cancel,
     spawn = spawn,
-
-    -- Extras
-    resumeafter = resumeafter,
-    resumeafterall = resumeafterall,
 }"#,
         )
         .set_name("task")

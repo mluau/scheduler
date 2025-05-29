@@ -21,8 +21,8 @@ for current = 1, batches do
 	for i = 1, per_batch do
 		--print("Spawning thread #" .. i)
 		task.spawn(function()
-			--task.wait(0.1)
-			_TEST_ASYNC_WORK(0.1)
+			task.wait(0.1)
+			--_TEST_ASYNC_WORK(0.1)
 			if i == per_batch then
 				print("Last thread in batch #" .. current)
 				assert(coroutine.status(thread) == "suspended", `Thread {i} has status {coroutine.status(thread)}`)

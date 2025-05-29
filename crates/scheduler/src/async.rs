@@ -60,6 +60,7 @@ where
     FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
 {
     lua.create_function(move |lua, (th, args): (LuaThread, LuaMultiValue)| {
+        //println!("called");
         let func_ref = func.clone();
 
         async fn exec_fut<
@@ -69,6 +70,7 @@ where
             FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
             R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
         >(lua_fut: &mlua::WeakLua, args: LuaMultiValue, func_ref: F) -> LuaResult<LuaMultiValue> {
+            //println!("ExecFut");
             let Some(lua) = lua_fut.try_upgrade() else {
                 return Err(LuaError::RuntimeError("Lua instance is no longer valid".to_string()));
             };
@@ -96,6 +98,7 @@ where
             FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
             R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
         >(taskmgr: TaskManager, lua_fut: mlua::WeakLua, th: LuaThread, args: LuaMultiValue, func_ref: F) {
+            //println!("fut");
             let res = exec_fut(&lua_fut, args, func_ref).await;
 
             // Ensure Lua VM is still active right now
@@ -105,30 +108,22 @@ where
 
             match res {
                 Ok(res) => {
-                    {
-                        let current_pending = taskmgr.inner.pending_asyncs.get();
-                        taskmgr.inner.pending_asyncs.set(current_pending - 1);
-                    }
+                    taskmgr.decr_async();
 
                     let result = th.resume(res);
 
                     taskmgr
-                        .inner
-                        .feedback
-                        .on_response("AsyncThread", &taskmgr, &th, result);
+                        .feedback()
+                        .on_response("AsyncThread", &th, result);
                 }
                 Err(err) => {
-                    {
-                        let current_pending = taskmgr.inner.pending_asyncs.get();
-                        taskmgr.inner.pending_asyncs.set(current_pending - 1);
-                    }
+                    taskmgr.decr_async();
 
                     let result = th.resume_error::<LuaMultiValue>(err.to_string());
 
                     taskmgr
-                        .inner
-                        .feedback
-                        .on_response("AsyncThread.Resume", &taskmgr, &th, result);
+                        .feedback()
+                        .on_response("AsyncThread.Resume", &th, result);
                 }
             }
         }
@@ -138,15 +133,17 @@ where
             .expect("Failed to get task manager")
             .clone();
 
-        {
-            let current_pending = taskmgr.inner.pending_asyncs.get();
-            taskmgr.inner.pending_asyncs.set(current_pending + 1);
-        };
+        //println!("acquired taskmgr");
+
+        taskmgr.incr_async();
 
         let inner = taskmgr.inner.clone();
         let mut async_executor = inner.async_task_executor.borrow_mut();
 
-        async_executor.spawn_local(fut(taskmgr, lua.weak(), th, args, func_ref));
+        let fut = fut(taskmgr, lua.weak(), th, args, func_ref);
+        //println!("fut made");
+        
+        async_executor.spawn_local(fut);
 
         Ok(())
     })

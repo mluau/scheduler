@@ -8,7 +8,9 @@ mlua = { git = "https://github.com/Anti-Raid/mlua", features = ["luau"] }
 tokio = { version = "1", features = ["rt", "macros", "fs", "time", "sync"] }
 log = "0.4"
 futures-util = "0.3.31"
+tokio-util = { version = "0.7", features = ["time"] }
 
 [features]
 default = []
+v2_taskmgr = []
 send = ["mlua/send"]

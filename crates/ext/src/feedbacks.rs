@@ -31,12 +31,11 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
     fn on_response(
         &self,
         label: &str,
-        tm: &TaskManager,
         th: &mlua::Thread,
         result: Result<mlua::MultiValue, mlua::Error>,
     ) {
-        self.0.on_response(label, tm, th, result.clone());
-        self.1.on_response(label, tm, th, result);
+        self.0.on_response(label, th, result.clone());
+        self.1.on_response(label, th, result);
     }
 }
 
@@ -79,11 +78,10 @@ impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
     fn on_response(
         &self,
         label: &str,
-        tm: &TaskManager,
         th: &mlua::Thread,
         result: Result<mlua::MultiValue, mlua::Error>,
     ) {
-        self.0.on_response(label, tm, th, result);
+        self.0.on_response(label, th, result);
     }
 }
 
@@ -148,7 +146,6 @@ impl SchedulerFeedback for ThreadTracker {
     fn on_response(
         &self,
         _label: &str,
-        _tm: &TaskManager,
         th: &mlua::Thread,
         result: Result<mlua::MultiValue, mlua::Error>,
     ) {

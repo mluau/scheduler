@@ -28,7 +28,7 @@ impl Scheduler {
     ///
     /// Note: this method also attaches the inner task manager itself
     pub fn attach(&self) -> Result<(), mlua::Error> { 
-        let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
+        let Some(lua) = self.task_manager.get_lua() else {
             return Err(mlua::Error::external("Lua state is not valid"));
         };
         lua.set_app_data(self.clone());
@@ -63,9 +63,8 @@ impl Scheduler {
         let resp = thread.resume(args);
 
         self.task_manager
-            .inner
-            .feedback
-            .on_response(label, &self.task_manager, &thread, resp);
+            .feedback()
+            .on_response(label, &thread, resp);
     }
 
     /// Spawns a thread and then proceeds to get its output properly
@@ -78,7 +77,7 @@ impl Scheduler {
         args: mlua::MultiValue,
     ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
         let mut rx = {
-            let Some(lua) = self.task_manager.inner.lua.try_upgrade() else {
+            let Some(lua) = self.task_manager.get_lua() else {
                 return Err(mlua::Error::external("Lua state is not valid"));
             };
     
@@ -94,9 +93,8 @@ impl Scheduler {
         let result = thread.resume(args);
 
         self.task_manager
-            .inner
-            .feedback
-            .on_response(label, &self.task_manager, &thread, result);
+            .feedback()
+            .on_response(label, &thread, result);
 
         let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
 
@@ -105,7 +103,7 @@ impl Scheduler {
                 break;
             };
 
-            if self.task_manager.inner.lua.try_upgrade().is_none() {
+            if self.task_manager.get_lua().is_none() {
                 log::trace!("Scheduler is no longer valid, exiting...");
                 break;
             }

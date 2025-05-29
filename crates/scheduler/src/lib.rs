@@ -1,5 +1,6 @@
 mod r#async;
 pub mod taskmgr;
+pub mod taskmgr_v2;
 pub mod userdata;
 pub mod task;
 
@@ -129,7 +130,7 @@ impl XUsize {
 
 /// Either a ``*const std::ffi::c_void`` or a String depending on send/sync status
 #[cfg(feature = "send")]
-#[derive(PartialEq, Hash, Eq)]
+#[derive(PartialEq, Hash, Eq, Clone)]
 pub struct XId(String);
 #[cfg(feature = "send")]
 impl XId {
@@ -139,7 +140,7 @@ impl XId {
 }
 
 #[cfg(not(feature = "send"))]
-#[derive(PartialEq, Hash, Eq)]
+#[derive(PartialEq, Hash, Eq, Clone)]
 pub struct XId(*const std::ffi::c_void);
 #[cfg(not(feature = "send"))]
 impl XId {
