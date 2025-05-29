@@ -5,10 +5,11 @@ pub mod task;
 
 #[cfg(feature = "v2_taskmgr")]
 pub mod taskmgr_v2;
+#[cfg(not(feature = "v2_taskmgr"))]
+pub mod taskmgr_v1;
 
 pub use r#async::LuaSchedulerAsync;
 pub use taskmgr::TaskManager;
-use std::sync::RwLock;
 
 pub const IS_SEND: bool = false;
 
@@ -26,7 +27,7 @@ pub struct XRefCell<T>(std::sync::RwLock<T>);
 #[cfg(feature = "send")]
 impl<T> XRefCell<T> {
     pub fn new(x: T) -> Self {
-        Self(RwLock::new(x))
+        Self(std::sync::RwLock::new(x))
     }
 
     pub fn borrow(&self) -> std::sync::RwLockReadGuard<'_, T> {

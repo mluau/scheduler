@@ -3,48 +3,6 @@ use std::cell::Cell;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
 
-pub enum WaitOp {
-    // task.wait semantics
-    Wait,
-    // task.delay semantics
-    Delay { 
-        args: mlua::MultiValue,
-    },
-}
-
-pub struct WaitingThread {
-    thread: mlua::Thread,
-    op: WaitOp,
-    start: std::time::Instant,
-    wake_at: std::time::Instant,
-}
-
-impl std::cmp::PartialEq for WaitingThread {
-    fn eq(&self, other: &Self) -> bool {
-        self.wake_at == other.wake_at
-    }
-}
-
-impl std::cmp::Eq for WaitingThread {}
-
-impl std::cmp::PartialOrd for WaitingThread {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::cmp::Ord for WaitingThread {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse order
-        (other.wake_at).cmp(&(self.wake_at))
-    }
-}
-
-pub struct DeferredThread {
-    thread: mlua::Thread,
-    args: mlua::MultiValue,
-}
-
 pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
     /// Function that is called whenever a thread is added/known to the task manager
     ///
@@ -70,228 +28,13 @@ pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
     }
 }
 
-/// Inner task manager state
-pub struct TaskManagerInner {
-    pub lua: mlua::WeakLua,
-    pub pending_asyncs: XUsize,
-    pub waiting_queue: XRefCell<BinaryHeap<WaitingThread>>,
-    pub deferred_queue: XRefCell<VecDeque<DeferredThread>>,
-    pub is_running: XBool,
-    pub is_cancelled: XBool,
-    pub feedback: XRc<dyn SchedulerFeedback>,
-    pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
-}
-
-impl TaskManagerInner {
-    fn new(
-        lua: &mlua::Lua,
-        feedback: XRc<dyn SchedulerFeedback>,
-    ) -> Self {
-        Self {
-            pending_asyncs: XUsize::new(0),
-            waiting_queue: XRefCell::new(BinaryHeap::default()),
-            deferred_queue: XRefCell::new(VecDeque::default()),
-            is_running: XBool::new(false),
-            is_cancelled: XBool::new(false),
-            feedback,
-            lua: lua.weak(),
-            async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
-        }
-    }
-
-    async fn run(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
-        if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            return; // Quick exit
-        }
-
-        self.is_running.set(true);
-
-        log::debug!("Task manager started");
-
-        loop {
-            if self.is_cancelled() || !self.check_lua() {
-                break;
-            }
-
-            self.process().await;
-
-            let _ = ticker.recv().await;
-        }
-
-        self.is_running.set(false)
-    }
-
-
-    /// Processes the task manager
-    async fn process(&self) {
-        // Process all threads in the queue
-
-        //log::debug!("Queue Length After Defer: {}", self.inner.len());
-        {
-            loop {
-                let current_time = std::time::Instant::now();
-
-                // Pop element from self_ref
-                let entry = {
-                    let mut self_ref = self.waiting_queue.borrow_mut();
-
-                    // Peek and check
-                    if let Some(entry) = self_ref.peek() {
-                        if entry.wake_at > current_time {
-                            break;
-                        }
-                    }
-
-                    // Pop out the peeked element
-                    let Some(entry) = self_ref.pop() else {
-                        break;
-                    };
-
-                    entry
-                };
-
-                if !self.check_lua() {
-                    break;
-                }
-
-                self.process_waiting_thread(entry, current_time).await;
-            }
-        }
-
-        {
-            loop {
-                // Pop element from self_ref
-                let entry = {
-                    let mut self_ref = self.deferred_queue.borrow_mut();
-
-                    let Some(entry) = self_ref.pop_back() else {
-                        break;
-                    };
-
-                    entry
-                };
-
-                if !self.check_lua() {
-                    break;
-                }
-
-                self.process_deferred_thread(entry).await;
-            }
-        }
-    }
-
-    /// Processes a deferred thread.
-    async fn process_deferred_thread(&self, thread_info: DeferredThread) {
-        /*
-            if coroutine.status(data.thread) ~= "dead" then
-               resume_with_error_check(data.thread, table.unpack(data.args))
-            end
-        */
-        match thread_info.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
-            _ => {
-                //log::debug!("Trying to resume deferred thread");
-                {
-                    let r = thread_info.thread.resume(thread_info.args);
-                    self.feedback.on_response(
-                        "DeferredThread",
-                        &thread_info.thread,
-                        r,
-                    );    
-                    tokio::task::yield_now().await;
-                };
-            }
-        }
-    }
-
-    /// Processes a waiting thread
-    async fn process_waiting_thread(
-        &self,
-        thread_info: WaitingThread,
-        current_time: std::time::Instant,
-    ) {
-        /*
-        if coroutine.status(thread) == "dead" then
-        elseif type(data) == "table" and last_tick >= data.resume then
-            if data.start then
-                resume_with_error_check(thread, last_tick - data.start)
-            else
-                resume_with_error_check(thread, table.unpack(data, 1, data.n))
-            end
-        else
-            waiting_threads[thread] = data
-        end
-                 */
-        match thread_info.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
-            _ => {
-                /*log::debug!(
-                    "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
-                    start,
-                    duration,
-                    current_time
-                );*/
-
-                // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                match thread_info.op {
-                    WaitOp::Wait => {
-                        // Push time elapsed
-                        let start = thread_info.start;
-
-                        {
-                            let r = thread_info
-                                .thread
-                                .resume((current_time - start).as_secs_f64());
-                            self.feedback.on_response(
-                                "WaitingThread",
-                                &thread_info.thread,
-                                r,
-                            );        
-
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                    WaitOp::Delay { args } => {
-                        let result = {
-                            let r = thread_info.thread.resume(args);
-                            tokio::task::yield_now().await;
-                            r
-                        };
-
-                        self.feedback.on_response(
-                            "DelayedThread",
-                            &thread_info.thread,
-                            result,
-                        );
-                    }
-                };
-            }
-        }
-    }
-
-    /// Checks if the lua state is valid
-    fn check_lua(&self) -> bool {
-        self.lua.try_upgrade().is_some()
-    }
-
-    /// Returns whether the task manager has been cancelled
-    fn is_cancelled(&self) -> bool {
-        self.is_cancelled.get()
-    }
-
-    /// Returns whether the task manager is running
-    fn is_running(&self) -> bool {
-        self.is_running.get()
-    }
-}
-
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
     #[cfg(feature = "v2_taskmgr")]
     pub(crate) inner: XRc<crate::taskmgr_v2::CoreScheduler>,
     #[cfg(not(feature = "v2_taskmgr"))]
-    pub(crate) inner: XRc<TaskManagerInner>,
+    pub(crate) inner: XRc<crate::taskmgr_v1::TaskManagerInner>,
 }
 
 impl TaskManager {
@@ -309,7 +52,7 @@ impl TaskManager {
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             Self {
-                inner: TaskManagerInner::new(lua, feedback).into(),
+                inner: crate::taskmgr_v1::TaskManagerInner::new(lua, feedback).into(),
             }
         }
     }
@@ -372,15 +115,15 @@ impl TaskManager {
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let op = match delay_args {
-                Some(delay_args) => WaitOp::Delay { args: delay_args },
-                None => WaitOp::Wait
+                Some(delay_args) => crate::taskmgr_v1::WaitOp::Delay { args: delay_args },
+                None => crate::taskmgr_v1::WaitOp::Wait
             };
 
             log::trace!("Trying to add thread to waiting queue");
             let mut self_ref = self.inner.waiting_queue.borrow_mut();
             let start = std::time::Instant::now();
             let wake_at = start + duration;
-            self_ref.push(WaitingThread {
+            self_ref.push(crate::taskmgr_v1::WaitingThread {
                 thread,
                 op,
                 start,
@@ -424,7 +167,7 @@ impl TaskManager {
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let mut self_ref = self.inner.deferred_queue.borrow_mut();
-            self_ref.push_back(DeferredThread { thread, args });
+            self_ref.push_back(crate::taskmgr_v1::DeferredThread { thread, args });
         }
     }
 
@@ -454,7 +197,7 @@ impl TaskManager {
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
     #[cfg(not(feature = "v2_taskmgr"))]
-    async fn run(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
+    async fn run(&self, ticker: tokio::sync::broadcast::Receiver<()>) {
         self.inner.run(ticker).await
     }
 
@@ -547,7 +290,7 @@ impl TaskManager {
     /// Returns the deferred queue length
     pub fn deferred_len(&self) -> usize {
         #[cfg(feature = "v2_taskmgr")]
-        { 0 } // todo
+        { self.inner.defer_count.get() }
         #[cfg(not(feature = "v2_taskmgr"))]
         self.inner.deferred_queue.borrow().len()
     }

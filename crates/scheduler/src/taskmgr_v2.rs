@@ -42,6 +42,7 @@ pub enum SchedulerEvent {
     Close {}
 }
 
+/// Inner scheduler v2
 pub struct CoreScheduler {
     pub lua: mlua::WeakLua,
     pub feedback: XRc<dyn SchedulerFeedback>,
@@ -50,6 +51,7 @@ pub struct CoreScheduler {
     pub is_running: XBool,
     pub is_cancelled: XBool,
     pub wait_count: XUsize,
+    pub defer_count: XUsize,
 
     tx: tokio::sync::mpsc::UnboundedSender<SchedulerEvent>,
     rx: XRefCell<Option<tokio::sync::mpsc::UnboundedReceiver<SchedulerEvent>>>,
@@ -72,6 +74,7 @@ impl CoreScheduler {
             is_running: XBool::new(false),
             is_cancelled: XBool::new(false),
             wait_count: XUsize::new(0),
+            defer_count: XUsize::new(0),
             tx,
             rx: XRefCell::new(Some(rx)),
             pending_asyncs: XUsize::new(0),
@@ -123,6 +126,7 @@ impl CoreScheduler {
                                 xid: xid.clone()
                             });
                             known_deferred_threads.insert(xid);
+                            self.defer_count.set(self.defer_count.get() + 1);
                         },
                         SchedulerEvent::CancelWaitThread { xid } => {
                             if let Some(keys) = wait_keys.get(&xid) {
@@ -134,7 +138,9 @@ impl CoreScheduler {
                             };
                         }
                         SchedulerEvent::CancelDeferredThread { xid } => {
-                            known_deferred_threads.remove(&xid);
+                            if known_deferred_threads.remove(&xid) {
+                                self.defer_count.set(self.defer_count.get() - 1);
+                            }
                         }
                         SchedulerEvent::Clear {} => {
                             wait_queue.clear();
@@ -182,6 +188,7 @@ impl CoreScheduler {
                 Some(deferred_thread) = deferred_queue.1.recv() => {
                     if known_deferred_threads.contains(&deferred_thread.xid) {
                         self.process_deferred_thread(deferred_thread);
+                        self.defer_count.set(self.defer_count.get() - 1);
                     }
                 }
             }
