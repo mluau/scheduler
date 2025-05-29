@@ -9,8 +9,7 @@ end
 
 local thread = task.spawn(function()
     print("a")
-    --print(task.wait(1))
-    print(_TEST_ASYNC_WORK(1))
+    print(task.wait(1))
     print("d")
     print(coroutine.yield())
     print("f")
