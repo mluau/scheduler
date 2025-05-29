@@ -82,6 +82,209 @@ pub struct TaskManagerInner {
     pub async_task_executor: XRefCell<tokio::task::JoinSet<()>>,
 }
 
+impl TaskManagerInner {
+    fn new(
+        lua: &mlua::Lua,
+        feedback: XRc<dyn SchedulerFeedback>,
+    ) -> Self {
+        Self {
+            pending_asyncs: XUsize::new(0),
+            waiting_queue: XRefCell::new(BinaryHeap::default()),
+            deferred_queue: XRefCell::new(VecDeque::default()),
+            is_running: XBool::new(false),
+            is_cancelled: XBool::new(false),
+            feedback,
+            lua: lua.weak(),
+            async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
+        }
+    }
+
+    async fn run(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
+        if self.is_running() || self.is_cancelled() || !self.check_lua() {
+            return; // Quick exit
+        }
+
+        self.is_running.set(true);
+
+        log::debug!("Task manager started");
+
+        loop {
+            if self.is_cancelled() || !self.check_lua() {
+                break;
+            }
+
+            self.process().await;
+
+            let _ = ticker.recv().await;
+        }
+
+        self.is_running.set(false)
+    }
+
+
+    /// Processes the task manager
+    async fn process(&self) {
+        // Process all threads in the queue
+
+        //log::debug!("Queue Length After Defer: {}", self.inner.len());
+        {
+            loop {
+                let current_time = std::time::Instant::now();
+
+                // Pop element from self_ref
+                let entry = {
+                    let mut self_ref = self.waiting_queue.borrow_mut();
+
+                    // Peek and check
+                    if let Some(entry) = self_ref.peek() {
+                        if entry.wake_at > current_time {
+                            break;
+                        }
+                    }
+
+                    // Pop out the peeked element
+                    let Some(entry) = self_ref.pop() else {
+                        break;
+                    };
+
+                    entry
+                };
+
+                if !self.check_lua() {
+                    break;
+                }
+
+                self.process_waiting_thread(entry, current_time).await;
+            }
+        }
+
+        {
+            loop {
+                // Pop element from self_ref
+                let entry = {
+                    let mut self_ref = self.deferred_queue.borrow_mut();
+
+                    let Some(entry) = self_ref.pop_back() else {
+                        break;
+                    };
+
+                    entry
+                };
+
+                if !self.check_lua() {
+                    break;
+                }
+
+                self.process_deferred_thread(entry).await;
+            }
+        }
+    }
+
+    /// Processes a deferred thread.
+    async fn process_deferred_thread(&self, thread_info: DeferredThread) {
+        /*
+            if coroutine.status(data.thread) ~= "dead" then
+               resume_with_error_check(data.thread, table.unpack(data.args))
+            end
+        */
+        match thread_info.thread.status() {
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
+            _ => {
+                //log::debug!("Trying to resume deferred thread");
+                {
+                    let r = thread_info.thread.resume(thread_info.args);
+                    self.feedback.on_response(
+                        "DeferredThread",
+                        &thread_info.thread,
+                        r,
+                    );    
+                    tokio::task::yield_now().await;
+                };
+            }
+        }
+    }
+
+    /// Processes a waiting thread
+    async fn process_waiting_thread(
+        &self,
+        thread_info: WaitingThread,
+        current_time: std::time::Instant,
+    ) {
+        /*
+        if coroutine.status(thread) == "dead" then
+        elseif type(data) == "table" and last_tick >= data.resume then
+            if data.start then
+                resume_with_error_check(thread, last_tick - data.start)
+            else
+                resume_with_error_check(thread, table.unpack(data, 1, data.n))
+            end
+        else
+            waiting_threads[thread] = data
+        end
+                 */
+        match thread_info.thread.status() {
+            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
+            _ => {
+                /*log::debug!(
+                    "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
+                    start,
+                    duration,
+                    current_time
+                );*/
+
+                // resume_with_error_check(thread, table.unpack(data, 1, data.n))
+                match thread_info.op {
+                    WaitOp::Wait => {
+                        // Push time elapsed
+                        let start = thread_info.start;
+
+                        {
+                            let r = thread_info
+                                .thread
+                                .resume((current_time - start).as_secs_f64());
+                            self.feedback.on_response(
+                                "WaitingThread",
+                                &thread_info.thread,
+                                r,
+                            );        
+
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                    WaitOp::Delay { args } => {
+                        let result = {
+                            let r = thread_info.thread.resume(args);
+                            tokio::task::yield_now().await;
+                            r
+                        };
+
+                        self.feedback.on_response(
+                            "DelayedThread",
+                            &thread_info.thread,
+                            result,
+                        );
+                    }
+                };
+            }
+        }
+    }
+
+    /// Checks if the lua state is valid
+    fn check_lua(&self) -> bool {
+        self.lua.try_upgrade().is_some()
+    }
+
+    /// Returns whether the task manager has been cancelled
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled.get()
+    }
+
+    /// Returns whether the task manager is running
+    fn is_running(&self) -> bool {
+        self.is_running.get()
+    }
+}
+
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
@@ -106,24 +309,9 @@ impl TaskManager {
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             Self {
-                inner: TaskManagerInner {
-                    pending_asyncs: XUsize::new(0),
-                    waiting_queue: XRefCell::new(BinaryHeap::default()),
-                    deferred_queue: XRefCell::new(VecDeque::default()),
-                    is_running: XBool::new(false),
-                    is_cancelled: XBool::new(false),
-                    feedback,
-                    lua: lua.weak(),
-                    async_task_executor: XRefCell::new(tokio::task::JoinSet::new()),
-                }
-                .into(),
+                inner: TaskManagerInner::new(lua, feedback).into(),
             }
         }
-    }
-
-    /// Checks if the lua state is valid
-    fn check_lua(&self) -> bool {
-        self.inner.lua.try_upgrade().is_some()
     }
 
     /// Tries to get strong ref to lua
@@ -265,37 +453,22 @@ impl TaskManager {
     /// Runs the task manager
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
+    #[cfg(not(feature = "v2_taskmgr"))]
     async fn run(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner.run().await
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            if self.is_running() || self.is_cancelled() || !self.check_lua() {
-                return; // Quick exit
-            }
+        self.inner.run(ticker).await
+    }
 
-            self.inner.is_running.set(true);
-
-            log::debug!("Task manager started");
-
-            loop {
-                if self.is_cancelled() || !self.check_lua() {
-                    break;
-                }
-
-                self.process().await;
-
-                let _ = ticker.recv().await;
-            }
-
-            self.inner.is_running.set(false)
-        }
+    /// Runs the task manager
+    ///
+    /// Note that the scheduler will automatically schedule run to be called if needed
+    #[cfg(feature = "v2_taskmgr")]
+    async fn run(&self) {
+        self.inner.run().await
     }
 
     /// Helper method to start up the task manager
     /// from a synchronous context
+    #[cfg(not(feature = "v2_taskmgr"))]
     pub fn run_in_task(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return;
@@ -315,158 +488,29 @@ impl TaskManager {
         });
     }
 
-    /// Processes the task manager
-    #[cfg(not(feature = "v2_taskmgr"))]
-    async fn process(&self) {
-        /*log::debug!(
-            "Queue Length: {}, Running: {}",
-            self.inner.len(),
-            self.inner.is_running()
-        );*/
-
-        // Process all threads in the queue
-
-        //log::debug!("Queue Length After Defer: {}", self.inner.len());
-        {
-            loop {
-                let current_time = std::time::Instant::now();
-
-                // Pop element from self_ref
-                let entry = {
-                    let mut self_ref = self.inner.waiting_queue.borrow_mut();
-
-                    // Peek and check
-                    if let Some(entry) = self_ref.peek() {
-                        if entry.wake_at > current_time {
-                            break;
-                        }
-                    }
-
-                    // Pop out the peeked element
-                    let Some(entry) = self_ref.pop() else {
-                        break;
-                    };
-
-                    entry
-                };
-
-                if !self.check_lua() {
-                    break;
-                }
-
-                self.process_waiting_thread(entry, current_time).await;
-            }
+    #[cfg(feature = "v2_taskmgr")]
+    pub fn run_in_task(&self) {
+        if self.is_running() || self.is_cancelled() || !self.check_lua() {
+            return;
         }
 
-        {
-            loop {
-                // Pop element from self_ref
-                let entry = {
-                    let mut self_ref = self.inner.deferred_queue.borrow_mut();
+        log::debug!("Firing up task manager");
 
-                    let Some(entry) = self_ref.pop_back() else {
-                        break;
-                    };
+        let self_ref = self.clone();
 
-                    entry
-                };
-
-                if !self.check_lua() {
-                    break;
-                }
-
-                self.process_deferred_thread(entry).await;
-            }
-        }
+        #[cfg(feature = "send")]
+        tokio::task::spawn(async move {
+            self_ref.run().await;
+        });
+        #[cfg(not(feature = "send"))]
+        tokio::task::spawn_local(async move {
+            self_ref.run().await;
+        });
     }
 
-    /// Processes a deferred thread.
-    async fn process_deferred_thread(&self, thread_info: DeferredThread) {
-        /*
-            if coroutine.status(data.thread) ~= "dead" then
-               resume_with_error_check(data.thread, table.unpack(data.args))
-            end
-        */
-        match thread_info.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
-            _ => {
-                //log::debug!("Trying to resume deferred thread");
-                {
-                    let r = thread_info.thread.resume(thread_info.args);
-                    self.inner.feedback.on_response(
-                        "DeferredThread",
-                        &thread_info.thread,
-                        r,
-                    );    
-                    tokio::task::yield_now().await;
-                };
-            }
-        }
-    }
-
-    /// Processes a waiting thread
-    async fn process_waiting_thread(
-        &self,
-        thread_info: WaitingThread,
-        current_time: std::time::Instant,
-    ) {
-        /*
-        if coroutine.status(thread) == "dead" then
-        elseif type(data) == "table" and last_tick >= data.resume then
-            if data.start then
-                resume_with_error_check(thread, last_tick - data.start)
-            else
-                resume_with_error_check(thread, table.unpack(data, 1, data.n))
-            end
-        else
-            waiting_threads[thread] = data
-        end
-                 */
-        match thread_info.thread.status() {
-            mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
-            _ => {
-                /*log::debug!(
-                    "Resuming waiting thread, start: {:?}, duration: {:?}, current_time: {:?}",
-                    start,
-                    duration,
-                    current_time
-                );*/
-
-                // resume_with_error_check(thread, table.unpack(data, 1, data.n))
-                match thread_info.op {
-                    WaitOp::Wait => {
-                        // Push time elapsed
-                        let start = thread_info.start;
-
-                        {
-                            let r = thread_info
-                                .thread
-                                .resume((current_time - start).as_secs_f64());
-                            self.inner.feedback.on_response(
-                                "WaitingThread",
-                                &thread_info.thread,
-                                r,
-                            );        
-
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                    WaitOp::Delay { args } => {
-                        let result = {
-                            let r = thread_info.thread.resume(args);
-                            tokio::task::yield_now().await;
-                            r
-                        };
-
-                        self.inner.feedback.on_response(
-                            "DelayedThread",
-                            &thread_info.thread,
-                            result,
-                        );
-                    }
-                };
-            }
-        }
+    /// Checks if the lua state is valid
+    fn check_lua(&self) -> bool {
+        self.inner.lua.try_upgrade().is_some()
     }
 
     /// Stops the task manager
