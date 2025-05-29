@@ -315,11 +315,12 @@ impl TaskManager {
     /// Waits until the task manager is done
     pub async fn wait_till_done(&self, sleep_interval: Duration) {
         while !self.is_cancelled() {
-            tokio::time::sleep(sleep_interval).await;
-
+            tokio::task::yield_now().await;
             if self.is_empty() {
                 break;
             }
+
+            tokio::time::sleep(sleep_interval).await;
         }
     }
 }
