@@ -1,7 +1,6 @@
 mod r#async;
 pub mod taskmgr;
 pub mod userdata;
-pub mod task;
 
 #[cfg(feature = "v2_taskmgr")]
 pub mod taskmgr_v2;
@@ -132,22 +131,14 @@ impl XUsize {
 }
 
 /// Either a ``*const std::ffi::c_void`` or a String depending on send/sync status
-#[cfg(feature = "send")]
-#[derive(PartialEq, Hash, Eq, Clone)]
-pub struct XId(String);
-#[cfg(feature = "send")]
-impl XId {
-    pub fn from_ptr(ptr: *const std::ffi::c_void) -> Self {
-        XId(format!("{:?}", ptr))
-    }
-}
-
-#[cfg(not(feature = "send"))]
 #[derive(PartialEq, Hash, Eq, Clone)]
 pub struct XId(*const std::ffi::c_void);
-#[cfg(not(feature = "send"))]
 impl XId {
     pub fn from_ptr(ptr: *const std::ffi::c_void) -> Self {
         XId(ptr)
     }
 }
+
+// SAFETY: XId is only used for hashing and equality and so is Send/Sync
+unsafe impl Send for XId {}
+unsafe impl Sync for XId {}

@@ -18,14 +18,6 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 resume = 0.05; // Avoid 100% CPU usage
             }
 
-            let curr_thread = lua.current_thread();
-
-            taskmgr_wq_ref.feedback().on_thread_add(
-                "WaitingThread.WaitSemantics",
-                &curr_thread,
-                &th,
-            )?;
-
             taskmgr_wq_ref.add_waiting_thread(
                 th,
                 None,
@@ -40,9 +32,8 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "addWaitingDelay",
         lua.create_function(
-            move |lua,
-                  (f, resume, args): (
-                LuaEither<LuaFunction, LuaThread>,
+            move |lua, (th, resume, args): (
+                LuaThread,
                 Option<f64>,
                 LuaMultiValue,
             )| {
@@ -51,23 +42,12 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     resume = 0.05; // Avoid 100% CPU usage
                 }
 
-                let th = match f {
-                    LuaEither::Left(f) => lua.create_thread(f)?,
-                    LuaEither::Right(t) => t,
-                };
-
-                taskmgr_delay_ref.feedback().on_thread_add(
-                    "WaitingThread.DelaySemantics",
-                    &lua.current_thread(),
-                    &th,
-                )?;
-
                 taskmgr_delay_ref.add_waiting_thread(
-                    th.clone(),
+                    th,
                     Some(args),
                     std::time::Duration::from_secs_f64(resume),
                 );
-                Ok(th)
+                Ok(())
             },
         )?,
     )?;
@@ -86,20 +66,9 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
     scheduler_tab.set(
         "addDeferred",
         lua.create_function(
-            move |lua, (f, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
-                let th = match f {
-                    LuaEither::Left(f) => lua.create_thread(f)?,
-                    LuaEither::Right(t) => t,
-                };
-
-                taskmgr_back_ref.feedback().on_thread_add(
-                    "DeferredThread",
-                    &lua.current_thread(),
-                    &th,
-                )?;
-
-                taskmgr_back_ref.add_deferred_thread(th.clone(), args);
-                Ok(th)
+            move |lua, (th, args): (LuaThread, LuaMultiValue)| {
+                taskmgr_back_ref.add_deferred_thread(th, args);
+                Ok(())
             },
         )?,
     )?;
@@ -110,16 +79,6 @@ pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
         "removeDeferred",
         lua.create_function(move |_lua, th: LuaThread| {
             Ok(taskmgr_remove_deferred_ref.remove_deferred_thread(&th))
-        })?,
-    )?;
-
-    scheduler_tab.set(
-        "onThreadAdd",
-        lua.create_function(move |lua, (label, th): (String, LuaThread)| {
-            let taskmgr = super::taskmgr::get(lua);
-            taskmgr.feedback().on_thread_add(&label, &lua.current_thread(), &th)
-            .map_err(LuaError::external)?;
-            Ok(())
         })?,
     )?;
 
@@ -153,7 +112,6 @@ pub fn task_lib(lua: &Lua, scheduler_tab: LuaTable) -> LuaResult<LuaTable> {
             r#"
 local table = ...
 
-local old_create = coroutine.create
 local old_resume = coroutine.resume
 local function coroutineResume(coroutine, ...)
     local ok, v = old_resume(coroutine, ...)
@@ -164,21 +122,18 @@ local function coroutineResume(coroutine, ...)
     end
 end
 
-local function coroutineCreate(task, ...)
-    local thread = old_create(task, ...)
-    table.onThreadAdd("TaskSpawn", thread)
-    return thread
-end
-
-coroutine.create = coroutineCreate
 coroutine.resume = coroutineResume
 
 local function defer<T...>(task: Task<T...>, ...: T...): thread
-    return table.addDeferred(task, ...)
+    local thread = if type(task) == "thread" then task else coroutine.create(task)
+    table.addDeferred(thread, ...)
+    return thread
 end
 
 local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    return table.addWaitingDelay(task, time, ...)
+    local thread = if type(task) == "thread" then task else coroutine.create(task)
+    table.addWaitingDelay(thread, time, ...)
+    return thread
 end
 
 local function desynchronize(...)

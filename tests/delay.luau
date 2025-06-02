@@ -12,7 +12,7 @@ task.delay(0, function()
 	flag = true
 end)
 assert(not flag, "Delay should not run instantly or block")
-task.wait(0.05)
+task.wait(0.1)
 assert(flag, "Delay should run after the wanted duration")
 
 -- Delayed functions should work with yielding

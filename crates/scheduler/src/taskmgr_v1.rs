@@ -261,4 +261,31 @@ impl TaskManagerInner {
     fn is_running(&self) -> bool {
         self.is_running.get()
     }
+
+    /// Returns the waiting queue length
+    pub(crate) fn waiting_len(&self) -> usize {
+        self.waiting_queue.borrow().len()
+    }
+
+    /// Returns the deferred queue length
+    pub(crate) fn deferred_len(&self) -> usize {
+        self.deferred_queue.borrow().len()
+    }
+
+    /// Returns the pending asyncs length
+    pub(crate) fn pending_asyncs_len(&self) -> usize {
+        self.pending_asyncs.get()
+    }
+
+    /// Returns the number of items in the whole scheduler
+    pub(crate) fn len(&self) -> usize {
+        self.waiting_len()
+            + self.deferred_len()
+            + self.pending_asyncs_len()
+    }
+
+    /// Returns if the queue is empty
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }

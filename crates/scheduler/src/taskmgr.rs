@@ -4,19 +4,6 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
 
 pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
-    /// Function that is called whenever a thread is added/known to the task manager
-    ///
-    /// Contains both the creator thread and the thread that was added
-    fn on_thread_add(
-        &self,
-        _label: &str,
-        _creator: &mlua::Thread,
-        _thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        // Do nothing, unless overridden
-        Ok(())
-    }
-
     /// Function that is called when any response, Ok or Error occurs
     fn on_response(
         &self,
@@ -279,44 +266,17 @@ impl TaskManager {
         }
     }
 
-    /// Returns the waiting queue length
-    pub fn waiting_len(&self) -> usize {
-        #[cfg(feature = "v2_taskmgr")]
-        { self.inner.wait_count.get() }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        self.inner.waiting_queue.borrow().len()
-    }
-
-    /// Returns the deferred queue length
-    pub fn deferred_len(&self) -> usize {
-        #[cfg(feature = "v2_taskmgr")]
-        { self.inner.defer_count.get() }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        self.inner.deferred_queue.borrow().len()
-    }
-
-    /// Returns the pending asyncs length
-    pub fn pending_asyncs_len(&self) -> usize {
-        self.inner.pending_asyncs.get()
-    }
-
-    /// Returns the number of items in the whole queue
-    pub fn len(&self) -> usize {
-        self.waiting_len()
-            + self.deferred_len()
-            + self.pending_asyncs_len()
-    }
-
-    /// Returns if the queue is empty
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Waits until the task manager is done
     pub async fn wait_till_done(&self, sleep_interval: Duration) {
+        #[cfg(feature = "v2_taskmgr")]
+        {
+            let _ = self.inner.wait_till_done().await;
+        }
+        #[cfg(not(feature = "v2_taskmgr"))]
         while !self.is_cancelled() {
             tokio::task::yield_now().await;
-            if self.is_empty() {
+            println!("len: {}", self.inner.len());
+            if self.inner.is_empty() {
                 break;
             }
 

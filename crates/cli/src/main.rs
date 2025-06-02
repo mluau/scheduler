@@ -62,15 +62,6 @@ fn main() {
         pub struct TaskPrintError {}
 
         impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskPrintError {
-            fn on_thread_add(
-                &self,
-                _label: &str,
-                _creator: &mlua::Thread,
-                _thread: &mlua::Thread,
-            ) -> mlua::Result<()> {
-                Ok(())
-            }
-
             fn on_response(
                 &self,
                 _label: &str,
@@ -107,6 +98,17 @@ fn main() {
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let ref_a = task_mgr.clone();
+            #[cfg(feature = "send")]
+            tokio::task::spawn(async move {
+                let (tx, mut rx) = tokio::sync::broadcast::channel(100);
+                ref_a.run_in_task(rx);
+                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1));
+                loop {
+                    ticker.tick().await;
+                    let _ = tx.send(());
+                }
+            });
+            #[cfg(not(feature = "send"))]
             tokio::task::spawn_local(async move {
                 let (tx, mut rx) = tokio::sync::broadcast::channel(100);
                 ref_a.run_in_task(rx);
@@ -126,8 +128,9 @@ fn main() {
             .set(
                 "_TEST_ASYNC_WORK",
                 lua.create_scheduler_async_function(|lua, n: u64| async move {
+                    let curr_time = std::time::Instant::now();
                     tokio::time::sleep(std::time::Duration::from_secs(n)).await;
-                    Ok(())
+                    Ok(curr_time.elapsed().as_secs_f64())
                 })
                 .expect("Failed to create async function"),
             )
@@ -289,10 +292,6 @@ fn main() {
             .build()
             .unwrap();
 
-        // Still needs to be in a LocalSet. 
-        // The lua vm should be pinned to a thread when there is any chance of multiple vm's accessing it
-        // at the same time (or use a tokio sync mutex)
-        let local = tokio::task::LocalSet::new();
-        local.block_on(&rt, async_closure);
+        rt.block_on(async_closure);
     }
 }

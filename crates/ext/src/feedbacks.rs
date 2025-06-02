@@ -18,16 +18,6 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> ChainFeedback<T, U> {
 }
 
 impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeedback<T, U> {
-    fn on_thread_add(
-        &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        self.0.on_thread_add(label, creator, thread)?;
-        self.1.on_thread_add(label, creator, thread)
-    }
-
     fn on_response(
         &self,
         label: &str,
@@ -36,52 +26,6 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
     ) {
         self.0.on_response(label, th, result.clone());
         self.1.on_response(label, th, result);
-    }
-}
-
-/// Not all scheduler feedbacks need both on_thread_add and on_response
-///
-/// Some only need on_thread_add. As such, using a ThreadAddMiddleware+ThreadAddMiddlewareFeedback
-/// can be more efficient
-pub trait ThreadAddMiddleware: MaybeSend + MaybeSync {
-    fn on_thread_add(
-        &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()>;
-}
-
-/// Attaches a ThreadAddMiddleware to a SchedulerFeedback
-pub struct ThreadAddMiddlewareFeedback<T: SchedulerFeedback, U: ThreadAddMiddleware>(pub T, pub U);
-
-impl<T: SchedulerFeedback, U: ThreadAddMiddleware> ThreadAddMiddlewareFeedback<T, U> {
-    /// Creates a new ThreadAddMiddlewareFeedback
-    pub fn new(t: T, u: U) -> Self {
-        Self(t, u)
-    }
-}
-
-impl<T: SchedulerFeedback, U: ThreadAddMiddleware> SchedulerFeedback
-    for ThreadAddMiddlewareFeedback<T, U>
-{
-    fn on_thread_add(
-        &self,
-        label: &str,
-        creator: &mlua::Thread,
-        thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        self.0.on_thread_add(label, creator, thread)?;
-        self.1.on_thread_add(label, creator, thread)
-    }
-
-    fn on_response(
-        &self,
-        label: &str,
-        th: &mlua::Thread,
-        result: Result<mlua::MultiValue, mlua::Error>,
-    ) {
-        self.0.on_response(label, th, result);
     }
 }
 
@@ -134,15 +78,6 @@ impl ThreadTracker {
 }
 
 impl SchedulerFeedback for ThreadTracker {
-    fn on_thread_add(
-        &self,
-        _label: &str,
-        _creator: &mlua::Thread,
-        _thread: &mlua::Thread,
-    ) -> mlua::Result<()> {
-        Ok(())
-    }
-
     fn on_response(
         &self,
         _label: &str,

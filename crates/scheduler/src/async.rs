@@ -1,5 +1,4 @@
 use mlua::prelude::*;
-
 use crate::{MaybeSync, TaskManager};
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
@@ -15,15 +14,14 @@ where
 local luacall = ...
 
 local function callback(...)
-    local callbackArgs = ...
-    luacall(coroutine.running(), callbackArgs)
+    luacall(coroutine.running(), ...)
     return coroutine.yield()
 end
 
 return callback
             "#,
         )
-        .set_name("__sched_yield")
+        .set_name("=__sched_yield")
         .call::<LuaFunction>(inner_async_func(lua, func))?;
 
     Ok(func)
@@ -46,12 +44,59 @@ where
 {
     let func = lua
         .load(lua_code)
-        .set_name("__sched_yield")
+        .set_name("=__sched_yield")
         .call::<LuaFunction>((inner_async_func(lua, func)?, extra_args))?;
 
     Ok(func)
 }
 
+#[cfg(feature = "v2_taskmgr")]
+/// The inner async function driving create_async_lua_function
+pub fn inner_async_func<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
+where
+    A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+    F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
+    R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+    FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
+{
+    lua.create_function(move |lua, (th, args): (LuaThread, LuaMultiValue)| {
+        let func_ref = func.clone();
+        let args = A::from_lua_multi(args, &lua)?;
+
+        let weak_lua = lua.weak();
+
+        let fut = async move {
+            let Some(lua) = weak_lua.try_upgrade() else {
+                return Err(LuaError::RuntimeError("Lua instance is no longer valid".to_string()));
+            };
+
+            match (func_ref)(lua, args).await {
+                Ok(res) => {
+                    let Some(lua) = weak_lua.try_upgrade() else {
+                        return Err(LuaError::RuntimeError("Lua instance is no longer valid".to_string()));
+                    };
+
+                    res.into_lua_multi(&lua)
+                },
+                Err(e) => Err(e)
+            }
+        };
+
+        let taskmgr = lua
+            .app_data_ref::<TaskManager>()
+            .expect("Failed to get task manager")
+            .clone();
+
+        taskmgr.inner.push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
+            thread: th,
+            fut: Box::pin(fut),
+        });
+
+        Ok(())
+    })
+}
+
+#[cfg(not(feature = "v2_taskmgr"))]
 /// The inner async function driving create_async_lua_function
 pub fn inner_async_func<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
 where
@@ -144,6 +189,9 @@ where
         let fut = fut(taskmgr, lua.weak(), th, args, func_ref);
         //println!("fut made");
         
+        #[cfg(feature = "send")]
+        async_executor.spawn(fut);
+        #[cfg(not(feature = "send"))]
         async_executor.spawn_local(fut);
 
         Ok(())
