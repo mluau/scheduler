@@ -93,9 +93,6 @@ pub struct CoreScheduler {
 
     done_tx: Sender<bool>,
     done_rx: tokio::sync::RwLock<Receiver<bool>>,
-
-    // v1 compat
-    pub pending_asyncs: XUsize,
 }
 
 impl CoreScheduler {
@@ -123,7 +120,6 @@ impl CoreScheduler {
             rx: XRefCell::new(Some(InnerFlumeRecv(rx))),
             done_tx,
             done_rx: tokio::sync::RwLock::new(done_rx),
-            pending_asyncs: XUsize::new(0),
         }
     }
 
@@ -183,9 +179,6 @@ impl CoreScheduler {
                         },
                         SchedulerEvent::AddAsync { thread, fut } => {
                             async_queue.push(fut.map(move |x| (thread, x)));
-
-                            let current_pending = self.pending_asyncs.get();
-                            self.pending_asyncs.set(current_pending + 1);
                         }
                         SchedulerEvent::CancelWaitThread { xid } => {
                             if let Some(keys) = wait_keys.get(&xid) {
@@ -293,13 +286,10 @@ impl CoreScheduler {
                             } 
                         }
                     };
-
-                    let current_pending = self.pending_asyncs.get();
-                    self.pending_asyncs.set(current_pending - 1);
                 }
             };
 
-            if self.pending_asyncs.get() == 0 && wait_queue.is_empty() && deferred_queue.1.is_empty() && rx.is_empty() {
+            if async_queue.is_empty() && wait_queue.is_empty() && deferred_queue.1.is_empty() && rx.is_empty() {
                 self.done_tx.send_replace(true);
             }
         }

@@ -73,17 +73,8 @@ impl TaskManager {
         &*self.inner.feedback
     }
 
-    pub fn incr_async(&self) {
-        let current_pending = self.inner.pending_asyncs.get();
-        self.inner.pending_asyncs.set(current_pending + 1);
-    }
-
-    pub fn decr_async(&self) {
-        let current_pending = self.inner.pending_asyncs.get();
-        self.inner.pending_asyncs.set(current_pending - 1);
-    }
-
     /// Adds a waiting thread to the task manager
+    #[inline]
     pub fn add_waiting_thread(
         &self,
         thread: mlua::Thread,
@@ -121,6 +112,7 @@ impl TaskManager {
     }
 
     /// Removes a waiting thread from the task manager
+    #[inline]
     pub fn remove_waiting_thread(&self, thread: &mlua::Thread) {
         #[cfg(feature = "v2_taskmgr")]
         {
@@ -143,6 +135,7 @@ impl TaskManager {
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
+    #[inline]
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         #[cfg(feature = "v2_taskmgr")]
         {
@@ -159,6 +152,7 @@ impl TaskManager {
     }
 
     /// Removes a deferred thread from the task manager
+    #[inline]
     pub fn remove_deferred_thread(&self, thread: &mlua::Thread) {
         #[cfg(feature = "v2_taskmgr")]
         {
@@ -183,6 +177,7 @@ impl TaskManager {
     /// Runs the task manager
     ///
     /// Note that the scheduler will automatically schedule run to be called if needed
+    #[inline]
     #[cfg(not(feature = "v2_taskmgr"))]
     async fn run(&self, ticker: tokio::sync::broadcast::Receiver<()>) {
         self.inner.run(ticker).await

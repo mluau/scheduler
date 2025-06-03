@@ -154,7 +154,7 @@ where
 
             match res {
                 Ok(res) => {
-                    taskmgr.decr_async();
+                    taskmgr.inner.decr_async();
 
                     let result = th.resume(res);
 
@@ -163,7 +163,7 @@ where
                         .on_response("AsyncThread", &th, result);
                 }
                 Err(err) => {
-                    taskmgr.decr_async();
+                    taskmgr.inner.decr_async();
 
                     let result = th.resume_error::<LuaMultiValue>(err.to_string());
 
@@ -181,7 +181,7 @@ where
 
         //println!("acquired taskmgr");
 
-        taskmgr.incr_async();
+        taskmgr.inner.incr_async();
 
         let inner = taskmgr.inner.clone();
         let mut async_executor = inner.async_task_executor.borrow_mut();

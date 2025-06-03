@@ -288,4 +288,14 @@ impl TaskManagerInner {
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub(crate) fn incr_async(&self) {
+        let current_pending = self.pending_asyncs.get();
+        self.pending_asyncs.set(current_pending + 1);
+    }
+
+    pub(crate) fn decr_async(&self) {
+        let current_pending = self.pending_asyncs.get();
+        self.pending_asyncs.set(current_pending - 1);
+    }
 }
