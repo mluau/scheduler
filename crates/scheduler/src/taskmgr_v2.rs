@@ -276,7 +276,7 @@ impl CoreScheduler {
                                     );    
                                 },
                                 Err(e) => {
-                                    let r = thread.resume_error::<mlua::MultiValue>(e);
+                                    let r = thread.resume_error::<mlua::MultiValue>(e.to_string());
                                     self.feedback.on_response(
                                         "DeferredThread",
                                         &thread,
