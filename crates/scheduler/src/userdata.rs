@@ -157,7 +157,7 @@ end
 
 local function spawn(task: TaskFunction, ...: any): thread
     local thread = if type(task) == "thread" then task else coroutine.create(task)
-    coroutine.resume(thread, ...)
+    coroutineResume(thread, ...)
     return thread
 end
 
