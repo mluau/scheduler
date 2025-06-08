@@ -406,6 +406,12 @@ impl CoreScheduler {
 
     pub async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut done_rx = self.done_rx.write().await;
+
+        // Check if the task manager is already done
+        if *done_rx.borrow() {
+            return Ok(());
+        }
+
         done_rx.wait_for(|val| *val).await?;
         Ok(())
     }
