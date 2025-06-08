@@ -2,10 +2,10 @@ mod r#async;
 pub mod taskmgr;
 pub mod userdata;
 
-#[cfg(feature = "v2_taskmgr")]
-pub mod taskmgr_v2;
 #[cfg(not(feature = "v2_taskmgr"))]
 pub mod taskmgr_v1;
+#[cfg(feature = "v2_taskmgr")]
+pub mod taskmgr_v2;
 
 pub use r#async::LuaSchedulerAsync;
 pub use taskmgr::TaskManager;
@@ -131,7 +131,7 @@ impl XUsize {
 }
 
 /// Either a ``*const std::ffi::c_void`` or a String depending on send/sync status
-#[derive(PartialEq, Hash, Eq, Clone)]
+#[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub struct XId(*const std::ffi::c_void);
 impl XId {
     pub fn from_ptr(ptr: *const std::ffi::c_void) -> Self {

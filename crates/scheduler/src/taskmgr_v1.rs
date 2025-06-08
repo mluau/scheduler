@@ -1,16 +1,12 @@
-use crate::{XRc, XRefCell, XBool, XUsize};
-use std::cell::Cell;
-use std::collections::{BinaryHeap, VecDeque};
-use std::time::Duration;
 use crate::taskmgr::SchedulerFeedback;
+use crate::{XBool, XRc, XRefCell, XUsize};
+use std::collections::{BinaryHeap, VecDeque};
 
 pub enum WaitOp {
     // task.wait semantics
     Wait,
     // task.delay semantics
-    Delay { 
-        args: mlua::MultiValue,
-    },
+    Delay { args: mlua::MultiValue },
 }
 
 pub struct WaitingThread {
@@ -59,10 +55,7 @@ pub struct TaskManagerInner {
 }
 
 impl TaskManagerInner {
-    pub(crate) fn new(
-        lua: &mlua::Lua,
-        feedback: XRc<dyn SchedulerFeedback>,
-    ) -> Self {
+    pub(crate) fn new(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
         Self {
             pending_asyncs: XUsize::new(0),
             waiting_queue: XRefCell::new(BinaryHeap::default()),
@@ -98,7 +91,6 @@ impl TaskManagerInner {
 
         self.is_running.set(false)
     }
-
 
     /// Processes the task manager
     async fn process(&self) {
@@ -171,11 +163,8 @@ impl TaskManagerInner {
                 //log::debug!("Trying to resume deferred thread");
                 {
                     let r = thread_info.thread.resume(thread_info.args);
-                    self.feedback.on_response(
-                        "DeferredThread",
-                        &thread_info.thread,
-                        r,
-                    );    
+                    self.feedback
+                        .on_response("DeferredThread", &thread_info.thread, r);
                     tokio::task::yield_now().await;
                 };
             }
@@ -220,11 +209,8 @@ impl TaskManagerInner {
                             let r = thread_info
                                 .thread
                                 .resume((current_time - start).as_secs_f64());
-                            self.feedback.on_response(
-                                "WaitingThread",
-                                &thread_info.thread,
-                                r,
-                            );        
+                            self.feedback
+                                .on_response("WaitingThread", &thread_info.thread, r);
 
                             tokio::task::yield_now().await;
                         }
@@ -236,11 +222,8 @@ impl TaskManagerInner {
                             r
                         };
 
-                        self.feedback.on_response(
-                            "DelayedThread",
-                            &thread_info.thread,
-                            result,
-                        );
+                        self.feedback
+                            .on_response("DelayedThread", &thread_info.thread, result);
                     }
                 };
             }
@@ -279,9 +262,7 @@ impl TaskManagerInner {
 
     /// Returns the number of items in the whole scheduler
     pub(crate) fn len(&self) -> usize {
-        self.waiting_len()
-            + self.deferred_len()
-            + self.pending_asyncs_len()
+        self.waiting_len() + self.deferred_len() + self.pending_asyncs_len()
     }
 
     /// Returns if the queue is empty

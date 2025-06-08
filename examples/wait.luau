@@ -28,4 +28,4 @@ currTime = os.clock()
 
 _TEST_ASYNC_WORK(3)
 
-print("Time waited:", os.clock() - currTime)
+print("Time waited (TAW):", os.clock() - currTime)

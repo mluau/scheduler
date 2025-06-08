@@ -2,7 +2,6 @@ use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use mlua_scheduler::XRc;
-use mlua_scheduler_ext::Scheduler;
 use std::{env::consts::OS, path::PathBuf, time::Duration};
 use tokio::fs;
 
@@ -28,7 +27,7 @@ async fn spawn_script(lua: &mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Resu
     let th = lua.create_thread(f)?;
     //println!("Spawning thread: {:?}", th.to_pointer());
 
-    let scheduler = mlua_scheduler_ext::Scheduler::get(&lua);
+    let scheduler = mlua_scheduler_ext::Scheduler::get(lua);
     let output = scheduler
         .spawn_thread_and_wait("SpawnScript", th, mlua::MultiValue::new())
         .await;
@@ -110,7 +109,7 @@ fn main() {
             });
             #[cfg(not(feature = "send"))]
             tokio::task::spawn_local(async move {
-                let (tx, mut rx) = tokio::sync::broadcast::channel(100);
+                let (tx, rx) = tokio::sync::broadcast::channel(100);
                 ref_a.run_in_task(rx);
                 let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1));
                 loop {
@@ -127,65 +126,21 @@ fn main() {
         lua.globals()
             .set(
                 "_TEST_ASYNC_WORK",
-                lua.create_scheduler_async_function(|lua, n: u64| async move {
+                lua.create_scheduler_async_function(|_lua, mut n: f64| async move {
+                    if n < 0.0 {
+                        return Err(mlua::Error::external("Negative sleep time"));
+                    }
+                    if n < 0.05 {
+                        n = 0.10; // Minimum sleep time
+                    }
+
                     let curr_time = std::time::Instant::now();
-                    tokio::time::sleep(std::time::Duration::from_secs(n)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(n)).await;
                     Ok(curr_time.elapsed().as_secs_f64())
                 })
                 .expect("Failed to create async function"),
             )
             .expect("Failed to set _OS global");
-
-        /*let count_v = Cell::new(0);
-
-        let mut max_threads = i64::MAX;
-
-        if let Ok(v) = std::env::var("MAX_THREADS") {
-            if let Ok(v) = v.parse::<i64>() {
-                if v > 0 && v < max_threads {
-                    // Override the max threads
-                    max_threads = v;
-                }
-            }
-        }
-
-        lua.set_thread_event_callback(move |lua, value| {
-            match value {
-                LuaValue::Thread(_) => count_v.set(count_v.get() + 1),
-                _ => count_v.set(count_v.get() - 1),
-            };
-
-            if count_v.get() > max_threads {
-                // Prevent runaway threads
-                println!(
-                    "Warning: Thread count exceeded limit: {} (max: {}). The exact way the thread will error is UNDEFINED BEHAVIOR but is guaranteed to be safe from a memory standpoint",
-                    count_v.get(),
-                    max_threads
-                );
-
-                let err = mlua::Error::RuntimeError(
-                    "Too many threads created, possible runaway detected".to_string(),
-                );
-
-                // Push the error to the scheduler
-                if let LuaValue::Thread(th) = value {
-                    let scheduler = Scheduler::get(lua);
-                    if let Err(e) = scheduler
-                    .feedback()
-                    .on_thread_add("AddFailedThread", &lua.current_thread(), &th) {
-                        println!("Failed to track thread due to: {}", e);
-                    }           
-
-                    scheduler
-                    .feedback()
-                    .on_response("AddFailedThread", &scheduler, &th, Err(err.clone()));               
-                }
-                
-                Err(err)
-            } else {
-                Ok(())
-            }
-        });*/
 
         lua.globals()
             .set(
@@ -200,18 +155,21 @@ fn main() {
             )
             .expect("Failed to set _OS global");
 
-        let scheduler_lib =
-            mlua_scheduler::userdata::scheduler_lib(&lua).expect("Failed to create scheduler lib");
-
         lua.globals()
-            .set("scheduler", scheduler_lib.clone())
-            .expect("Failed to set scheduler global");
+            .set(
+                "_PANIC",
+                lua.create_scheduler_async_function(|_lua, n: i32| async move {
+                    panic!("Panic test: {}", n);
+                    Ok(())
+                })
+                .expect("Failed to create async function"),
+            )
+            .expect("Failed to set _OS global");
 
         lua.globals()
             .set(
                 "task",
-                mlua_scheduler::userdata::task_lib(&lua, scheduler_lib)
-                    .expect("Failed to create table"),
+                mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
             )
             .expect("Failed to set task global");
 

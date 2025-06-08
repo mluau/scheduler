@@ -1,179 +1,122 @@
 use mlua::prelude::*;
 
-/// Returns the low-level Scheduler library of which task lib is based on
-///
-/// Note that task manager must be attached prior to calling this function
-pub fn scheduler_lib(lua: &Lua) -> LuaResult<LuaTable> {
+/// Creates the `task` library, patching coroutine.resume to handle on_response signals as appropriate.
+pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
     let taskmgr_parent = super::taskmgr::get(lua);
 
-    let scheduler_tab = lua.create_table()?;
-
-    // Adds a thread to the waiting queue
-    let taskmgr_wq_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "addWaitingWait",
-        lua.create_function(move |lua, (th, resume): (LuaThread, Option<f64>)| {
-            let mut resume = resume.unwrap_or_default();
-            if resume < 0.05 {
-                resume = 0.05; // Avoid 100% CPU usage
-            }
-
-            taskmgr_wq_ref.add_waiting_thread(
-                th,
-                None,
-                std::time::Duration::from_secs_f64(resume),
-            );
-            Ok(())
+    let taskmgr_ref = taskmgr_parent.clone();
+    lua.globals().get::<LuaTable>("coroutine")?.set(
+        "resume",
+        lua.create_function(move |_lua, (coroutine, args): (LuaThread, LuaMultiValue)| {
+            let result = coroutine.resume(args);
+            taskmgr_ref
+                .feedback()
+                .on_response("CoroutineResume", &coroutine, result.clone());
+            result
         })?,
     )?;
 
-    // Adds a thread to the waiting queue with arguments
-    let taskmgr_delay_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "addWaitingDelay",
+    let table = lua.create_table()?;
+    let taskmgr_ref = taskmgr_parent.clone();
+    table.set(
+        "defer",
         lua.create_function(
-            move |lua, (th, resume, args): (
-                LuaThread,
-                Option<f64>,
-                LuaMultiValue,
-            )| {
-                let mut resume = resume.unwrap_or_default();
-                if resume < 0.05 {
-                    resume = 0.05; // Avoid 100% CPU usage
-                }
+            move |lua, (task, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+                let thread = match task {
+                    LuaEither::Left(func) => lua.create_thread(func)?,
+                    LuaEither::Right(th) => th,
+                };
 
-                taskmgr_delay_ref.add_waiting_thread(
-                    th,
+                taskmgr_ref.add_deferred_thread(thread.clone(), args);
+                println!("Task deferred: {:?}", thread);
+                Ok(thread)
+            },
+        )?,
+    )?;
+
+    let taskmgr_ref = taskmgr_parent.clone();
+    table.set(
+        "delay",
+        lua.create_function(
+            move |lua, (time, task, args): (f64, LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+                let thread = match task {
+                    LuaEither::Left(func) => lua.create_thread(func)?,
+                    LuaEither::Right(th) => th,
+                };
+
+                taskmgr_ref.add_waiting_thread(
+                    thread.clone(),
                     Some(args),
-                    std::time::Duration::from_secs_f64(resume),
+                    std::time::Duration::from_secs_f64(time),
                 );
-                Ok(())
+                Ok(thread)
             },
         )?,
     )?;
 
-    // Removes a thread from the waiting queue, returning the number of threads removed
-    let taskmgr_remove_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "removeWaiting",
-        lua.create_function(move |_lua, th: LuaThread| {
-            Ok(taskmgr_remove_ref.remove_waiting_thread(&th))
+    table.set(
+        "desynchronize",
+        lua.create_function(move |_lua, _args: LuaMultiValue| {
+            // No-op in this context
+            Ok(())
         })?,
     )?;
 
-    // Adds a thread to the deferred queue
-    let taskmgr_back_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "addDeferred",
+    table.set(
+        "synchronize",
+        lua.create_function(move |_lua, _args: LuaMultiValue| {
+            // No-op in this context
+            Ok(())
+        })?,
+    )?;
+
+    let taskmgr_ref = taskmgr_parent.clone();
+    table.set(
+        "wait",
+        lua.create_function(move |lua, time: Option<f64>| {
+            let thread = lua.current_thread();
+            let duration = time.map_or(std::time::Duration::from_secs_f64(0.05), |t| {
+                std::time::Duration::from_secs_f64(t.max(0.05))
+            });
+
+            taskmgr_ref.add_waiting_thread(thread.clone(), None, duration);
+            lua.yield_with(())
+        })?,
+    )?;
+
+    let taskmgr_ref = taskmgr_parent.clone();
+    let coro_close_fn = lua
+        .globals()
+        .get::<LuaTable>("coroutine")?
+        .get::<LuaFunction>("close")?;
+
+    table.set(
+        "cancel",
+        lua.create_function(move |_lua, thread: LuaThread| {
+            taskmgr_ref.cancel_task(&thread);
+            coro_close_fn.call::<()>(thread)?;
+            Ok(())
+        })?,
+    )?;
+
+    let taskmgr_ref = taskmgr_parent.clone();
+    table.set(
+        "spawn",
         lua.create_function(
-            move |lua, (th, args): (LuaThread, LuaMultiValue)| {
-                taskmgr_back_ref.add_deferred_thread(th, args);
-                Ok(())
+            move |lua, (task, args): (LuaEither<LuaFunction, LuaThread>, LuaMultiValue)| {
+                let thread = match task {
+                    LuaEither::Left(func) => lua.create_thread(func)?,
+                    LuaEither::Right(th) => th,
+                };
+
+                let result = thread.resume(args);
+                taskmgr_ref
+                    .feedback()
+                    .on_response("TaskSpawn", &thread, result.clone());
+                Ok(thread)
             },
         )?,
     )?;
-
-    // Removes a thread from the deferred queue returning the number of threads removed
-    let taskmgr_remove_deferred_ref = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "removeDeferred",
-        lua.create_function(move |_lua, th: LuaThread| {
-            Ok(taskmgr_remove_deferred_ref.remove_deferred_thread(&th))
-        })?,
-    )?;
-
-    let taskmgr = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "onResponseOk",
-        lua.create_function(move |lua, (label, th, result): (String, LuaThread, LuaMultiValue)| {
-            taskmgr.feedback().on_response(&label, &th, Ok(result));
-            Ok(())
-        })?,
-    )?;
-
-    let taskmgr = taskmgr_parent.clone();
-    scheduler_tab.set(
-        "onResponseErr",
-        lua.create_function(move |lua, (label, th, result): (String, LuaThread, LuaError)| {
-            taskmgr.feedback().on_response(&label, &th, Err(result));
-            Ok(())
-        })?,
-    )?;
-
-    scheduler_tab.set_readonly(true);
-
-    Ok(scheduler_tab)
-}
-
-/// Returns an implementation of the `task` library as a table
-pub fn task_lib(lua: &Lua, scheduler_tab: LuaTable) -> LuaResult<LuaTable> {
-    let table = lua
-        .load(
-            r#"
-local table = ...
-
-local old_resume = coroutine.resume
-local function coroutineResume(coroutine, ...)
-    local ok, v = old_resume(coroutine, ...)
-    if ok then
-        table.onResponseOk("TaskSpawn", coroutine, v)
-    else
-        table.onResponseErr("TaskSpawn", coroutine, v)
-    end
-end
-
-coroutine.resume = coroutineResume
-
-local function defer<T...>(task: Task<T...>, ...: T...): thread
-    local thread = if type(task) == "thread" then task else coroutine.create(task)
-    table.addDeferred(thread, ...)
-    return thread
-end
-
-local function delay<T...>(time: number, task: Task<T...>, ...: T...): thread
-    local thread = if type(task) == "thread" then task else coroutine.create(task)
-    table.addWaitingDelay(thread, time, ...)
-    return thread
-end
-
-local function desynchronize(...)
-    return
-end
-
-local function synchronize(...)
-    return
-end
-
-local function wait(time: number?): number
-    table.addWaitingWait(coroutine.running(), time)
-    return coroutine.yield()
-end
-
-local function cancel(thread: thread): ()
-    table.removeWaiting(thread)
-    table.removeDeferred(thread)
-    coroutine.close(thread)
-end
-
-local function spawn(task: TaskFunction, ...: any): thread
-    local thread = if type(task) == "thread" then task else coroutine.create(task)
-    coroutineResume(thread, ...)
-    return thread
-end
-
-return {
-    defer = defer,
-    delay = delay,
-    desynchronize = desynchronize,
-    synchronize = synchronize,
-    wait = wait,
-    cancel = cancel,
-    spawn = spawn,
-}"#,
-        )
-        .set_name("task")
-        .set_environment(lua.globals())
-        .call::<LuaTable>(scheduler_tab)?;
 
     table.set_readonly(true);
 

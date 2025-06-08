@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mlua_scheduler::{taskmgr::SchedulerFeedback, TaskManager, XRc, XRefCell, XId, MaybeSend, MaybeSync};
+use mlua_scheduler::{taskmgr::SchedulerFeedback, XId, XRc, XRefCell};
 
 /// Chain 2 feedbacks together
 pub struct ChainFeedback<T: SchedulerFeedback, U: SchedulerFeedback>(pub T, pub U);
@@ -34,12 +34,9 @@ impl<T: SchedulerFeedback, U: SchedulerFeedback> SchedulerFeedback for ChainFeed
 pub struct ThreadTracker {
     #[allow(clippy::type_complexity)]
     pub returns: XRc<
-        XRefCell<
-            HashMap<XId, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>,
-        >,
+        XRefCell<HashMap<XId, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>>,
     >,
 }
-
 
 impl Default for ThreadTracker {
     fn default() -> Self {
@@ -61,7 +58,9 @@ impl ThreadTracker {
         th: &mlua::Thread,
     ) -> tokio::sync::mpsc::UnboundedReceiver<mlua::Result<mlua::MultiValue>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.returns.borrow_mut().insert(XId::from_ptr(th.to_pointer()), tx);
+        self.returns
+            .borrow_mut()
+            .insert(XId::from_ptr(th.to_pointer()), tx);
 
         rx
     }
@@ -85,7 +84,11 @@ impl SchedulerFeedback for ThreadTracker {
         result: Result<mlua::MultiValue, mlua::Error>,
     ) {
         log::trace!("ThreadTracker: {:?} from {}", result, _label);
-        if let Some(tx) = self.returns.borrow_mut().get(&XId::from_ptr(th.to_pointer())) {
+        if let Some(tx) = self
+            .returns
+            .borrow_mut()
+            .get(&XId::from_ptr(th.to_pointer()))
+        {
             let _ = tx.send(result);
         }
     }

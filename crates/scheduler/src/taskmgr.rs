@@ -1,6 +1,4 @@
-use crate::{XRc, XRefCell, XBool, XUsize};
-use std::cell::Cell;
-use std::collections::{BinaryHeap, VecDeque};
+use crate::XRc;
 use std::time::Duration;
 
 pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
@@ -26,14 +24,11 @@ pub struct TaskManager {
 
 impl TaskManager {
     /// Creates a new task manager
-    pub fn new(
-        lua: &mlua::Lua,
-        feedback: XRc<dyn SchedulerFeedback>,
-    ) -> Self {
+    pub fn new(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
         #[cfg(feature = "v2_taskmgr")]
         {
             Self {
-                inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), feedback).into()
+                inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), feedback).into(),
             }
         }
         #[cfg(not(feature = "v2_taskmgr"))]
@@ -52,7 +47,9 @@ impl TaskManager {
     /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
     pub fn attach(&self) -> Result<(), mlua::Error> {
         let Some(lua) = self.get_lua() else {
-            return Err(mlua::Error::RuntimeError("Failed to upgrade lua".to_string()));
+            return Err(mlua::Error::RuntimeError(
+                "Failed to upgrade lua".to_string(),
+            ));
         };
         lua.set_app_data(self.clone());
         Ok(())
@@ -83,18 +80,19 @@ impl TaskManager {
     ) {
         #[cfg(feature = "v2_taskmgr")]
         {
-            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::Wait {
-                delay_args,
-                thread,
-                duration,
-                start_at: std::time::Instant::now()
-            });
+            self.inner
+                .push_event(crate::taskmgr_v2::SchedulerEvent::Wait {
+                    delay_args,
+                    thread,
+                    duration,
+                    start_at: std::time::Instant::now(),
+                });
         }
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let op = match delay_args {
                 Some(delay_args) => crate::taskmgr_v1::WaitOp::Delay { args: delay_args },
-                None => crate::taskmgr_v1::WaitOp::Wait
+                None => crate::taskmgr_v1::WaitOp::Wait,
             };
 
             log::trace!("Trying to add thread to waiting queue");
@@ -111,26 +109,25 @@ impl TaskManager {
         }
     }
 
-    /// Removes a waiting thread from the task manager
+    /// Cancels a thread that is waiting in the task manager
     #[inline]
-    pub fn remove_waiting_thread(&self, thread: &mlua::Thread) {
+    pub fn cancel_task(&self, thread: &mlua::Thread) {
         #[cfg(feature = "v2_taskmgr")]
         {
-            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::CancelWaitThread {
-                xid: crate::XId::from_ptr(thread.to_pointer())
-            });
+            self.inner
+                .cancel_task(crate::XId::from_ptr(thread.to_pointer()));
         }
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let mut self_ref = self.inner.waiting_queue.borrow_mut();
 
-            self_ref.retain(|x| {
-                if x.thread != *thread {
-                    true
-                } else {
-                    false
-                }
-            });
+            self_ref.retain(|x| x.thread != *thread);
+
+            drop(self_ref);
+
+            let mut self_ref = self.inner.deferred_queue.borrow_mut();
+
+            self_ref.retain(|x| x.thread != *thread);
         }
     }
 
@@ -139,38 +136,13 @@ impl TaskManager {
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
         #[cfg(feature = "v2_taskmgr")]
         {
-            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread {
-                args,
-                thread,
-            });
+            self.inner
+                .push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread { args, thread });
         }
         #[cfg(not(feature = "v2_taskmgr"))]
         {
             let mut self_ref = self.inner.deferred_queue.borrow_mut();
             self_ref.push_back(crate::taskmgr_v1::DeferredThread { thread, args });
-        }
-    }
-
-    /// Removes a deferred thread from the task manager
-    #[inline]
-    pub fn remove_deferred_thread(&self, thread: &mlua::Thread) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::CancelDeferredThread {
-                xid: crate::XId::from_ptr(thread.to_pointer())
-            });
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            let mut self_ref = self.inner.deferred_queue.borrow_mut();
-
-            self_ref.retain(|x| {
-                if x.thread != *thread {
-                    true
-                } else {
-                    false
-                }
-            });
         }
     }
 
@@ -194,7 +166,7 @@ impl TaskManager {
     /// Helper method to start up the task manager
     /// from a synchronous context
     #[cfg(not(feature = "v2_taskmgr"))]
-    pub fn run_in_task(&self, mut ticker: tokio::sync::broadcast::Receiver<()>) {
+    pub fn run_in_task(&self, ticker: tokio::sync::broadcast::Receiver<()>) {
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return;
         }
@@ -252,7 +224,8 @@ impl TaskManager {
     pub fn clear(&self) {
         #[cfg(feature = "v2_taskmgr")]
         {
-            self.inner.push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
+            self.inner
+                .push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
         }
         #[cfg(not(feature = "v2_taskmgr"))]
         {
