@@ -117,7 +117,7 @@ impl CoreScheduler {
         #[cfg(feature = "v2_taskmgr_flume")]
         let (cancel_tx, cancel_rx) = flume::unbounded();
 
-        let (done_tx, done_rx) = tokio::sync::watch::channel(false);
+        let (done_tx, done_rx) = tokio::sync::watch::channel(true);
         Self {
             lua,
             feedback,
@@ -398,6 +398,7 @@ impl CoreScheduler {
 
     /// Adds a waiting thread to the task manager
     pub fn push_event(&self, event: SchedulerEvent) {
+        self.done_tx.send_replace(false);
         let _ = self.tx.send(event);
     }
 
@@ -408,11 +409,6 @@ impl CoreScheduler {
 
     pub async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut done_rx = self.done_rx.write().await;
-
-        // Check if the task manager is already done
-        if *done_rx.borrow() {
-            return Ok(());
-        }
 
         done_rx.wait_for(|val| *val).await?;
         Ok(())
