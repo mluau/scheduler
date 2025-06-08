@@ -365,6 +365,8 @@ impl CoreScheduler {
                 && cancel_rx.is_empty()
             {
                 self.done_tx.send_replace(true);
+            } else {
+                self.done_tx.send_replace(false);
             }
         }
     }
