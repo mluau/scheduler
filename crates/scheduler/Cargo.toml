@@ -12,7 +12,7 @@ tokio-util = { version = "0.7", features = ["time"] }
 flume = { version = "0.11", optional = true }
 
 [features]
-default = []
+default = ["v2_taskmgr"]
 v2_taskmgr = []
 v2_taskmgr_flume = ["dep:flume"]
 send = ["mlua/send"]

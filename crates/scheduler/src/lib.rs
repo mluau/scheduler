@@ -8,6 +8,7 @@ pub mod taskmgr_v1;
 pub mod taskmgr_v2;
 
 pub use r#async::LuaSchedulerAsync;
+pub use r#async::LuaSchedulerAsyncUserData;
 pub use taskmgr::TaskManager;
 
 pub const IS_SEND: bool = false;

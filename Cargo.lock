@@ -408,7 +408,7 @@ dependencies = [
 [[package]]
 name = "mlua"
 version = "0.11.0-beta.1"
-source = "git+https://github.com/Anti-Raid/mlua-cont?branch=mlua-listofaux#d4616526921559363cadb96485592fb5ec74dd1b"
+source = "git+https://github.com/Anti-Raid/mlua-cont?branch=mlua-listofaux#bc97da0296e87e73b05d9ded6baca812fb4bdfaa"
 dependencies = [
  "bstr",
  "either",
@@ -421,8 +421,8 @@ dependencies = [
 
 [[package]]
 name = "mlua-sys"
-version = "0.7.0"
-source = "git+https://github.com/Anti-Raid/mlua-cont?branch=mlua-listofaux#d4616526921559363cadb96485592fb5ec74dd1b"
+version = "0.8.0"
+source = "git+https://github.com/Anti-Raid/mlua-cont?branch=mlua-listofaux#bc97da0296e87e73b05d9ded6baca812fb4bdfaa"
 dependencies = [
  "cc",
  "cfg-if",

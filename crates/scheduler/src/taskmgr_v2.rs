@@ -1,13 +1,11 @@
 use crate::taskmgr::SchedulerFeedback;
-use crate::{XBool, XId, XRc, XRefCell, XUsize};
+use crate::{XBool, XId, XRc, XRefCell};
 use futures_util::stream::FuturesUnordered;
 use futures_util::Future;
 use futures_util::FutureExt;
 use futures_util::StreamExt;
 use futures_util::TryFutureExt;
-use mlua::prelude::LuaResult;
-use mlua::IntoLuaMulti;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch::{Receiver, Sender};
