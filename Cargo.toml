@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["crates/scheduler", "crates/cli", "crates/ext"]
+members = ["crates/scheduler", "crates/cli"]
 default-members = ["crates/cli"]

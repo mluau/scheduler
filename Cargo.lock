@@ -450,17 +450,6 @@ dependencies = [
  "env_logger",
  "mlua",
  "mlua_scheduler",
- "mlua_scheduler_ext",
- "tokio",
-]
-
-[[package]]
-name = "mlua_scheduler_ext"
-version = "1.0.0"
-dependencies = [
- "log",
- "mlua",
- "mlua_scheduler",
  "tokio",
 ]
 

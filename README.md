@@ -37,8 +37,7 @@ end)
 
 mlua_scheduler has two scheduler versions. v1 (the original scheduler which used busy poll loop/spinloop that ran every tick to run through tasks) and v2 which is a new scheduler design based on tokio select and delayqueue/tokio channels without any busy polling. Here are the differences:
 
-- v1 scheduler tends to be a bit faster and/or slower than v2 under benchmarks (bench.luau runs a bit faster with v1 than v2 but tests/lune_lots_of_threads.luau runs a bit slower on v1 than v2)
-- v1 scheduler eats a lot more CPU than v2 even when there is no work to be done (in production, we found v1 to use 30-100% CPU when idle while v2 only uses 1-2% CPU)
-- v2 scheduler is async-aware and polls rust async futures + resumes in scheduler itself. This means that async has similar performance to scheduler native methods in v2 (v1 has a much higher penalty for async calls) and also does not deadlock in async either (see next issue for that)
-- v1 scheduler is known to deadlock under large amounts of (potentially recursive or otherwise) rust async calls (especially in ``send`` mode if a LocalRuntime/LocalSet is not used). v2 scheduler is rust async aware and does not have the deadlock issue in rust-async
-- v1 scheduler's ``wait_till_done`` may be inaccurate and return early as there is a fundemental race condition between its internal poll loop and lua's thread resume mechanism. v2 scheduler does not have this fundemental race condition and hence has a more accurate ``wait_till_done``
+mluau_scheduler no longer supports the v1 scheduler. The v2 scheduler is the only one supported and is the default.
+- V2 scheduler is based on the Tokio runtime and uses its async features.
+- V2 scheduler is more efficient and does not use busy polling.
+- V2 scheduler is more robust and can handle more complex tasks with minimal performance loss to the v1 scheduler.

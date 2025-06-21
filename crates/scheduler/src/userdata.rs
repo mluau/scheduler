@@ -10,9 +10,27 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
         lua.create_function(move |_lua, (coroutine, args): (LuaThread, LuaMultiValue)| {
             let result = coroutine.resume(args);
             taskmgr_ref
-                .feedback()
-                .on_response("CoroutineResume", &coroutine, result.clone());
+                .returns()
+                .push_result(&coroutine, result.clone());
             result
+        })?,
+    )?;
+
+    let taskmgr_ref = taskmgr_parent.clone();
+    lua.globals().get::<LuaTable>("coroutine")?.set(
+        "wrap",
+        lua.create_function(move |lua, f: LuaFunction| {
+            // coroutine.wrap is a convenience function that creates a coroutine and returns a function that resumes it.
+            let thread = lua.create_thread(f)?;
+            let taskmgr_ref = taskmgr_ref.clone();
+
+            let f = lua.create_function(move |_lua, args: LuaMultiValue| {
+                let result = thread.resume(args);
+                taskmgr_ref.returns().push_result(&thread, result.clone());
+                result
+            })?;
+
+            Ok(f)
         })?,
     )?;
 
@@ -28,7 +46,6 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 };
 
                 taskmgr_ref.add_deferred_thread(thread.clone(), args);
-                println!("Task deferred: {:?}", thread);
                 Ok(thread)
             },
         )?,
@@ -110,9 +127,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 };
 
                 let result = thread.resume(args);
-                taskmgr_ref
-                    .feedback()
-                    .on_response("TaskSpawn", &thread, result.clone());
+                taskmgr_ref.returns().push_result(&thread, result.clone());
                 Ok(thread)
             },
         )?,

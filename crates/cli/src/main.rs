@@ -1,8 +1,7 @@
 use clap::Parser;
 use mlua::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
-use mlua_scheduler::XRc;
-use std::{env::consts::OS, path::PathBuf, time::Duration};
+use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
 
 fn get_default_log_path() -> PathBuf {
@@ -27,12 +26,12 @@ async fn spawn_script(lua: &mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Resu
     let th = lua.create_thread(f)?;
     //println!("Spawning thread: {:?}", th.to_pointer());
 
-    let scheduler = mlua_scheduler_ext::Scheduler::get(lua);
+    let scheduler = mlua_scheduler::taskmgr::get(lua);
     let output = scheduler
-        .spawn_thread_and_wait("SpawnScript", th, mlua::MultiValue::new())
+        .spawn_thread_and_wait(th, mlua::MultiValue::new())
         .await;
 
-    println!("Output: {:?}", output);
+    println!("Output: {output:?}");
 
     //println!("Spawned thread: {:?}", th.to_pointer());
     Ok(())
@@ -56,68 +55,32 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        let thread_tracker = mlua_scheduler_ext::feedbacks::ThreadTracker::new();
+        let returns_tracker = mlua_scheduler::taskmgr::ReturnTracker::new();
 
-        pub struct TaskPrintError {}
+        let mut wildcard_sender = returns_tracker.track_wildcard_thread();
 
-        impl mlua_scheduler::taskmgr::SchedulerFeedback for TaskPrintError {
-            fn on_response(
-                &self,
-                _label: &str,
-                _th: &mlua::Thread,
-                result: mlua::Result<mlua::MultiValue>,
-            ) {
-                match result {
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                    }
+        #[cfg(feature = "send")]
+        tokio::task::spawn(async move {
+            while let Some((thread, result)) = wildcard_sender.recv().await {
+                if let Err(e) = result {
+                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
                 }
             }
-        }
+        });
 
-        lua.set_app_data(thread_tracker.clone());
-
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(
-            &lua,
-            XRc::new(mlua_scheduler_ext::feedbacks::ChainFeedback::new(
-                thread_tracker,
-                TaskPrintError {},
-            )),
-        );
-
-        let scheduler = mlua_scheduler_ext::Scheduler::new(task_mgr.clone());
-
-        scheduler.attach().expect("Failed to attach scheduler");
-
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            task_mgr.run_in_task();
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            let ref_a = task_mgr.clone();
-            #[cfg(feature = "send")]
-            tokio::task::spawn(async move {
-                let (tx, mut rx) = tokio::sync::broadcast::channel(100);
-                ref_a.run_in_task(rx);
-                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1));
-                loop {
-                    ticker.tick().await;
-                    let _ = tx.send(());
+        #[cfg(not(feature = "send"))]
+        tokio::task::spawn_local(async move {
+            while let Some((thread, result)) = wildcard_sender.recv().await {
+                if let Err(e) = result {
+                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
                 }
-            });
-            #[cfg(not(feature = "send"))]
-            tokio::task::spawn_local(async move {
-                let (tx, rx) = tokio::sync::broadcast::channel(100);
-                ref_a.run_in_task(rx);
-                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1));
-                loop {
-                    ticker.tick().await;
-                    let _ = tx.send(());
-                }
-            });
-        }
+            }
+        });
+
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, returns_tracker);
+
+        task_mgr.attach().expect("Failed to attach task manager");
+        task_mgr.run_in_task();
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
@@ -147,7 +110,7 @@ fn main() {
                 "_ERROR",
                 lua.create_scheduler_async_function(|_lua, n: i32| async move {
                     if n % 10 == 3 {
-                        return Ok(format!("Y{}", n));
+                        return Ok(format!("Y{n}"));
                     }
                     Err(mlua::Error::external(n.to_string()))
                 })
@@ -159,7 +122,8 @@ fn main() {
             .set(
                 "_PANIC",
                 lua.create_scheduler_async_function(|_lua, n: i32| async move {
-                    panic!("Panic test: {}", n);
+                    panic!("Panic test: {n}");
+                    #[allow(unreachable_code)]
                     Ok(())
                 })
                 .expect("Failed to create async function"),
@@ -218,7 +182,10 @@ fn main() {
                 .await
                 .expect("Failed to spawn script");
 
-            task_mgr.wait_till_done(Duration::from_millis(1000)).await;
+            task_mgr
+                .wait_till_done()
+                .await
+                .expect("Failed to wait for task manager");
         }
 
         println!("Stopping task manager");

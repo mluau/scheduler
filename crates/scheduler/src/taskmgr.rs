@@ -1,47 +1,113 @@
-use crate::XRc;
-use std::time::Duration;
+use crate::{XId, XRc, XRefCell};
+use std::collections::HashMap;
 
-pub trait SchedulerFeedback: crate::MaybeSend + crate::MaybeSync {
-    /// Function that is called when any response, Ok or Error occurs
-    fn on_response(
+#[allow(clippy::type_complexity)]
+pub struct ReturnTracker {
+    inner: XRc<
+        XRefCell<HashMap<XId, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>>,
+    >,
+    wildcard: XRc<
+        XRefCell<
+            Option<
+                tokio::sync::mpsc::UnboundedSender<(mlua::Thread, mlua::Result<mlua::MultiValue>)>,
+            >,
+        >,
+    >,
+}
+
+impl Default for ReturnTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReturnTracker {
+    /// Creates a new return tracker
+    pub fn new() -> Self {
+        Self {
+            inner: XRc::new(XRefCell::new(HashMap::new())),
+            wildcard: XRc::new(XRefCell::new(None)),
+        }
+    }
+
+    /// Track a threads result
+    pub fn track_thread(
         &self,
-        _label: &str,
-        _th: &mlua::Thread,
-        _result: mlua::Result<mlua::MultiValue>,
+        th: &mlua::Thread,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<mlua::Result<mlua::MultiValue>> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.inner
+            .borrow_mut()
+            .insert(XId::from_ptr(th.to_pointer()), tx);
+
+        rx
+    }
+
+    pub fn track_wildcard_thread(
+        &self,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<(mlua::Thread, mlua::Result<mlua::MultiValue>)> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut inner = self.wildcard.borrow_mut();
+        *inner = Some(tx);
+        rx
+    }
+
+    /// Set a wildcard sender for all threads
+    pub fn set_wildcard_sender(
+        &self,
+        sender: tokio::sync::mpsc::UnboundedSender<(mlua::Thread, mlua::Result<mlua::MultiValue>)>,
     ) {
-        // Do nothing, unless overridden
+        let mut inner = self.wildcard.borrow_mut();
+        *inner = Some(sender);
+    }
+
+    /// Push a result to the tracked thread
+    pub fn push_result(&self, th: &mlua::Thread, result: mlua::Result<mlua::MultiValue>) {
+        log::trace!("ThreadTracker: Pushing result to thread {th:?}");
+
+        {
+            let inner = self.wildcard.borrow();
+            if let Some(ref tx) = *inner {
+                // Remove the thread from the tracker
+                let _ = tx.send((th.clone(), result.clone()));
+            }
+        }
+
+        {
+            let inner = self.inner.borrow();
+
+            if let Some(tx) = inner.get(&XId::from_ptr(th.to_pointer())) {
+                let _ = tx.send(result);
+            }
+        }
     }
 }
 
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
-    #[cfg(feature = "v2_taskmgr")]
     pub(crate) inner: XRc<crate::taskmgr_v2::CoreScheduler>,
-    #[cfg(not(feature = "v2_taskmgr"))]
-    pub(crate) inner: XRc<crate::taskmgr_v1::TaskManagerInner>,
+}
+
+impl std::ops::Deref for TaskManager {
+    type Target = crate::taskmgr_v2::CoreScheduler;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
 }
 
 impl TaskManager {
     /// Creates a new task manager
-    pub fn new(lua: &mlua::Lua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            Self {
-                inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), feedback).into(),
-            }
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            Self {
-                inner: crate::taskmgr_v1::TaskManagerInner::new(lua, feedback).into(),
-            }
+    pub fn new(lua: &mlua::Lua, returns: ReturnTracker) -> Self {
+        Self {
+            inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).into(),
         }
     }
 
     /// Tries to get strong ref to lua
     pub fn get_lua(&self) -> Option<mlua::Lua> {
-        self.inner.lua.try_upgrade()
+        self.inner.lua().try_upgrade()
     }
 
     /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
@@ -57,17 +123,17 @@ impl TaskManager {
 
     /// Returns whether the task manager has been cancelled
     pub fn is_cancelled(&self) -> bool {
-        self.inner.is_cancelled.get()
+        self.inner.is_cancelled()
     }
 
     /// Returns whether the task manager is running
     pub fn is_running(&self) -> bool {
-        self.inner.is_running.get()
+        self.inner.is_running()
     }
 
-    /// Returns the feedback stored in the task manager
-    pub fn feedback(&self) -> &dyn SchedulerFeedback {
-        &*self.inner.feedback
+    /// Returns the returns stored in the task manager
+    pub fn returns(&self) -> &ReturnTracker {
+        self.inner.returns()
     }
 
     /// Adds a waiting thread to the task manager
@@ -78,114 +144,29 @@ impl TaskManager {
         delay_args: Option<mlua::MultiValue>,
         duration: std::time::Duration,
     ) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner
-                .push_event(crate::taskmgr_v2::SchedulerEvent::Wait {
-                    delay_args,
-                    thread,
-                    duration,
-                    start_at: std::time::Instant::now(),
-                });
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            let op = match delay_args {
-                Some(delay_args) => crate::taskmgr_v1::WaitOp::Delay { args: delay_args },
-                None => crate::taskmgr_v1::WaitOp::Wait,
-            };
-
-            log::trace!("Trying to add thread to waiting queue");
-            let mut self_ref = self.inner.waiting_queue.borrow_mut();
-            let start = std::time::Instant::now();
-            let wake_at = start + duration;
-            self_ref.push(crate::taskmgr_v1::WaitingThread {
+        self.inner
+            .push_event(crate::taskmgr_v2::SchedulerEvent::Wait {
+                delay_args,
                 thread,
-                op,
-                start,
-                wake_at,
+                duration,
+                start_at: std::time::Instant::now(),
             });
-            log::trace!("Added thread to waiting queue");
-        }
     }
 
     /// Cancels a thread that is waiting in the task manager
     #[inline]
     pub fn cancel_task(&self, thread: &mlua::Thread) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner
-                .cancel_task(crate::XId::from_ptr(thread.to_pointer()));
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            let mut self_ref = self.inner.waiting_queue.borrow_mut();
-
-            self_ref.retain(|x| x.thread != *thread);
-
-            drop(self_ref);
-
-            let mut self_ref = self.inner.deferred_queue.borrow_mut();
-
-            self_ref.retain(|x| x.thread != *thread);
-        }
+        self.inner
+            .cancel_task(crate::XId::from_ptr(thread.to_pointer()));
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     #[inline]
     pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner
-                .push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread { args, thread });
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            let mut self_ref = self.inner.deferred_queue.borrow_mut();
-            self_ref.push_back(crate::taskmgr_v1::DeferredThread { thread, args });
-        }
+        self.inner
+            .push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread { args, thread });
     }
 
-    /// Runs the task manager
-    ///
-    /// Note that the scheduler will automatically schedule run to be called if needed
-    #[inline]
-    #[cfg(not(feature = "v2_taskmgr"))]
-    async fn run(&self, ticker: tokio::sync::broadcast::Receiver<()>) {
-        self.inner.run(ticker).await
-    }
-
-    /// Runs the task manager
-    ///
-    /// Note that the scheduler will automatically schedule run to be called if needed
-    #[cfg(feature = "v2_taskmgr")]
-    async fn run(&self) {
-        self.inner.run().await
-    }
-
-    /// Helper method to start up the task manager
-    /// from a synchronous context
-    #[cfg(not(feature = "v2_taskmgr"))]
-    pub fn run_in_task(&self, ticker: tokio::sync::broadcast::Receiver<()>) {
-        if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            return;
-        }
-
-        log::debug!("Firing up task manager");
-
-        let self_ref = self.clone();
-
-        #[cfg(feature = "send")]
-        tokio::task::spawn(async move {
-            self_ref.run(ticker).await;
-        });
-        #[cfg(not(feature = "send"))]
-        tokio::task::spawn_local(async move {
-            self_ref.run(ticker).await;
-        });
-    }
-
-    #[cfg(feature = "v2_taskmgr")]
     pub fn run_in_task(&self) {
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
             return;
@@ -207,53 +188,75 @@ impl TaskManager {
 
     /// Checks if the lua state is valid
     fn check_lua(&self) -> bool {
-        self.inner.lua.try_upgrade().is_some()
+        self.inner.lua().try_upgrade().is_some()
     }
 
     /// Stops the task manager
     pub fn stop(&self) {
-        self.inner.is_cancelled.set(true);
+        self.set_cancelled(true);
     }
 
     /// Unstops the task manager
     pub fn unstop(&self) {
-        self.inner.is_cancelled.set(false);
+        self.set_cancelled(false);
     }
 
     /// Clears the task manager queues completely
     pub fn clear(&self) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            self.inner
-                .push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        {
-            self.inner.waiting_queue.borrow_mut().clear();
-            self.inner.deferred_queue.borrow_mut().clear();
-        }
+        self.inner
+            .push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
     }
 
-    /// Waits until the task manager is done
-    pub async fn wait_till_done(&self, sleep_interval: Duration) {
-        #[cfg(feature = "v2_taskmgr")]
-        {
-            let _ = self.inner.wait_till_done().await;
-        }
-        #[cfg(not(feature = "v2_taskmgr"))]
-        while !self.is_cancelled() {
-            tokio::task::yield_now().await;
-            println!("len: {}", self.inner.len());
-            if self.inner.is_empty() {
+    /// Spawns a thread, discarding its output entirely
+    pub async fn spawn_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+        let resp = thread.resume(args);
+
+        self.returns().push_result(&thread, resp);
+    }
+
+    /// Spawns a thread and then proceeds to get its output properly
+    ///
+    /// This requires ThreadTracker to be attached to the scheduler
+    pub async fn spawn_thread_and_wait(
+        &self,
+        thread: mlua::Thread,
+        args: mlua::MultiValue,
+    ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
+        let mut rx = self.returns().track_thread(&thread);
+
+        let result = thread.resume(args);
+
+        self.returns().push_result(&thread, result);
+
+        let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
+
+        loop {
+            let Some(next) = rx.recv().await else {
+                break;
+            };
+
+            if self.get_lua().is_none() {
+                log::trace!("Scheduler is no longer valid, exiting...");
                 break;
             }
 
-            tokio::time::sleep(sleep_interval).await;
+            log::trace!("Received value: {next:?}");
+            value = Some(next);
+
+            let status = thread.status();
+            if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+                && rx.is_empty()
+            {
+                log::trace!("Status: {status:?}");
+                break;
+            }
         }
+
+        Ok(value)
     }
 }
 
-pub fn get(lua: &mlua::Lua) -> mlua::AppDataRef<TaskManager> {
+pub fn get(lua: &'_ mlua::Lua) -> mlua::AppDataRef<'_, TaskManager> {
     lua.app_data_ref::<TaskManager>()
         .expect("Failed to get task manager")
 }

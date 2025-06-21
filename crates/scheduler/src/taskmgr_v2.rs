@@ -1,5 +1,5 @@
-use crate::taskmgr::SchedulerFeedback;
-use crate::{XBool, XId, XRc, XRefCell};
+use crate::taskmgr::ReturnTracker;
+use crate::{XBool, XId, XRefCell};
 use futures_util::stream::FuturesUnordered;
 use futures_util::Future;
 use futures_util::FutureExt;
@@ -67,12 +67,13 @@ impl<T> InnerFlumeRecv<T> {
 
 /// Inner scheduler v2
 pub struct CoreScheduler {
-    pub lua: mlua::WeakLua,
-    pub feedback: XRc<dyn SchedulerFeedback>,
+    lua: mlua::WeakLua,
+
+    returns: ReturnTracker,
 
     // Status flags
-    pub is_running: XBool,
-    pub is_cancelled: XBool,
+    is_running: XBool,
+    is_cancelled: XBool,
 
     // tx/rx
     #[cfg(not(feature = "v2_taskmgr_flume"))]
@@ -104,7 +105,7 @@ pub struct CoreScheduler {
 
 impl CoreScheduler {
     /// Creates a new task manager
-    pub fn new(lua: mlua::WeakLua, feedback: XRc<dyn SchedulerFeedback>) -> Self {
+    pub fn new(lua: mlua::WeakLua, returns: ReturnTracker) -> Self {
         #[cfg(not(feature = "v2_taskmgr_flume"))]
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         #[cfg(feature = "v2_taskmgr_flume")]
@@ -118,7 +119,7 @@ impl CoreScheduler {
         let (done_tx, done_rx) = tokio::sync::watch::channel(true);
         Self {
             lua,
-            feedback,
+            returns,
             is_running: XBool::new(false),
             is_cancelled: XBool::new(false),
 
@@ -178,7 +179,7 @@ impl CoreScheduler {
                 Some(event) = rx.recv() => {
                     match event {
                         SchedulerEvent::Wait { delay_args, thread, start_at, duration } => {
-                            let Some(lua) = self.lua.try_upgrade() else {
+                            let Some(_lua) = self.lua.try_upgrade() else {
                                 self.is_running.set(false);
                                 self.done_tx.send_replace(true);
                                 return
@@ -219,7 +220,7 @@ impl CoreScheduler {
                             wait_queue.clear();
                             wait_keys.clear();
                             self.cancel.borrow_mut().clear();
-                            while let Some(_) = deferred_queue.1.recv().await {}
+                            while deferred_queue.1.recv().await.is_some() {}
                         }
                         SchedulerEvent::Close {} => {
                             self.is_running.set(false);
@@ -237,10 +238,9 @@ impl CoreScheduler {
                     };
 
                     known_deferred_threads.remove(&xid);
-                    self.cancel.borrow_mut().remove(&xid);
                 },
                 Some(value) = wait_queue.next() => {
-                    let Some(lua) = self.lua.try_upgrade() else {
+                    let Some(_lua) = self.lua.try_upgrade() else {
                         self.is_running.set(false);
                         self.done_tx.send_replace(true);
                         return
@@ -260,8 +260,7 @@ impl CoreScheduler {
                         None => inner.thread.resume(inner.start_at.elapsed().as_secs_f64())
                     };
 
-                    self.feedback.on_response(
-                        "WaitingThread",
+                    self.returns.push_result(
                         &inner.thread,
                         r,
                     );
@@ -282,7 +281,7 @@ impl CoreScheduler {
                     }
                 }
                 Some(deferred_thread) = deferred_queue.1.recv() => {
-                    let Some(lua) = self.lua.try_upgrade() else {
+                    let Some(_lua) = self.lua.try_upgrade() else {
                         self.is_running.set(false);
                         self.done_tx.send_replace(true);
                         return
@@ -294,8 +293,7 @@ impl CoreScheduler {
 
                     if known_deferred_threads.contains(&deferred_thread.xid) {
                         let r = deferred_thread.thread.resume(deferred_thread.args);
-                        self.feedback.on_response(
-                            "DeferredThread",
+                        self.returns.push_result(
                             &deferred_thread.thread,
                             r,
                         );
@@ -304,7 +302,7 @@ impl CoreScheduler {
                     }
                 },
                 Some(resp) = async_queue.next() => {
-                    let Some(lua) = self.lua.try_upgrade() else {
+                    let Some(_lua) = self.lua.try_upgrade() else {
                         self.is_running.set(false);
                         self.done_tx.send_replace(true);
                         return;
@@ -318,16 +316,14 @@ impl CoreScheduler {
                                     match async_resp {
                                         Ok(resp) => {
                                             let r = thread.resume(resp);
-                                            self.feedback.on_response(
-                                                "DeferredThread",
+                                            self.returns.push_result(
                                                 &thread,
                                                 r,
                                             );
                                         },
                                         Err(e) => {
                                             let r = thread.resume_error::<mlua::MultiValue>(e.to_string());
-                                            self.feedback.on_response(
-                                                "DeferredThread",
+                                            self.returns.push_result(
                                                 &thread,
                                                 r,
                                             );
@@ -337,17 +333,16 @@ impl CoreScheduler {
                             };
                         },
                         Err((thread, e)) => {
-                            let mut error_payload = format!("Error in async thread: {:?}", e);
+                            let mut error_payload = format!("Error in async thread: {e:?}");
                             if let Some(error) = e.downcast_ref::<String>() {
-                                error_payload = format!("Error in async thread: {}", error);
+                                error_payload = format!("Error in async thread: {error}");
                             }
                             if let Some(error) = e.downcast_ref::<&str>() {
-                                error_payload = format!("Error in async thread: {}", error);
+                                error_payload = format!("Error in async thread: {error}");
                             }
 
                             let r = thread.resume_error::<mlua::MultiValue>(error_payload);
-                            self.feedback.on_response(
-                                "DeferredThread",
+                            self.returns.push_result(
                                 &thread,
                                 r,
                             );
@@ -369,6 +364,11 @@ impl CoreScheduler {
         }
     }
 
+    /// Returns the inner WeakLua reference
+    pub fn lua(&self) -> &mlua::WeakLua {
+        &self.lua
+    }
+
     /// Checks if the lua state is valid
     fn check_lua(&self) -> bool {
         self.lua.try_upgrade().is_some()
@@ -384,14 +384,24 @@ impl CoreScheduler {
         self.is_running.get()
     }
 
+    /// Set the is_cancelled flag
+    pub fn set_cancelled(&self, cancelled: bool) {
+        self.is_cancelled.set(cancelled);
+    }
+
+    /// Sets the is_running flag
+    pub fn set_running(&self, running: bool) {
+        self.is_running.set(running);
+    }
+
     /// Stops the task manager
     pub fn stop(&self) {
         self.is_cancelled.set(true);
     }
 
-    /// Returns the feedback stored in the task manager
-    pub fn feedback(&self) -> &dyn SchedulerFeedback {
-        &*self.feedback
+    /// Returns the return tracker stored in the task manager
+    pub fn returns(&self) -> &ReturnTracker {
+        &self.returns
     }
 
     /// Adds a waiting thread to the task manager
@@ -402,7 +412,10 @@ impl CoreScheduler {
 
     /// Cancels a task by its ID
     pub fn cancel_task(&self, xid: XId) {
-        self.cancel.borrow_mut().insert(xid);
+        self.cancel.borrow_mut().insert(xid.clone());
+        self.cancel_tx
+            .send(xid)
+            .expect("Failed to send cancel task");
     }
 
     pub async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
