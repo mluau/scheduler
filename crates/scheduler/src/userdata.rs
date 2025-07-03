@@ -7,12 +7,16 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
     let taskmgr_ref = taskmgr_parent.clone();
     lua.globals().get::<LuaTable>("coroutine")?.set(
         "resume",
-        lua.create_function(move |_lua, (coroutine, args): (LuaThread, LuaMultiValue)| {
+        lua.create_function(move |lua, (coroutine, args): (LuaThread, LuaMultiValue)| {
             let result = coroutine.resume(args);
             taskmgr_ref
                 .returns()
                 .push_result(&coroutine, result.clone());
-            result
+            
+            match result {
+                Ok(r) => (true, r).into_lua_multi(lua),
+                Err(r) => (false, r).into_lua_multi(lua),
+            }
         })?,
     )?;
 
