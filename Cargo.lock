@@ -406,23 +406,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "mlua"
-version = "0.11.0-beta.2"
-source = "git+https://github.com/mluau/mluau#bce35a7d64e645a2cf8998d1a8c02a5777e7d0e7"
-dependencies = [
- "bstr",
- "either",
- "mlua-sys",
- "num-traits",
- "parking_lot",
- "rustc-hash",
- "rustversion",
-]
-
-[[package]]
 name = "mlua-sys"
-version = "0.8.0"
-source = "git+https://github.com/mluau/mluau#bce35a7d64e645a2cf8998d1a8c02a5777e7d0e7"
+version = "0.8.1"
+source = "git+https://github.com/mluau/mluau#0be1908ce0542332ec5bbfb0957eae2317532ba0"
 dependencies = [
  "cc",
  "cfg-if",
@@ -437,7 +423,7 @@ dependencies = [
  "flume",
  "futures-util",
  "log",
- "mlua",
+ "mluau",
  "tokio",
  "tokio-util",
 ]
@@ -448,9 +434,23 @@ version = "1.0.0"
 dependencies = [
  "clap",
  "env_logger",
- "mlua",
  "mlua_scheduler",
+ "mluau",
  "tokio",
+]
+
+[[package]]
+name = "mluau"
+version = "0.11.0-beta.3"
+source = "git+https://github.com/mluau/mluau#0be1908ce0542332ec5bbfb0957eae2317532ba0"
+dependencies = [
+ "bstr",
+ "either",
+ "mlua-sys",
+ "num-traits",
+ "parking_lot",
+ "rustc-hash",
+ "rustversion",
 ]
 
 [[package]]

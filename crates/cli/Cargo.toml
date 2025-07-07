@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-mlua = { git = "https://github.com/mluau/mluau", features = ["luau"] }
+mluau = { git = "https://github.com/mluau/mluau", features = ["luau"] }
 mlua_scheduler = { version = "1.0.0", path = "../scheduler", default-features = false }
 tokio = { version = "1", features = ["rt"] }
 clap = { version = "4.5.20", features = ["derive", "string"] }
@@ -12,6 +12,6 @@ env_logger = "0.11"
 
 [features]
 default = []
-ncg = ["mlua/luau-jit"]
+ncg = ["mluau/luau-jit"]
 v2_taskmgr_flume = ["mlua_scheduler/v2_taskmgr_flume"]
 send = ["mlua_scheduler/send", "tokio/rt-multi-thread"]

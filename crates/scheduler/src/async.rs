@@ -1,12 +1,12 @@
 use crate::{MaybeSync, TaskManager};
-use mlua::prelude::*;
+use mluau::prelude::*;
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
 where
-    A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-    F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-    R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-    FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
+    A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+    F: Fn(Lua, A) -> FR + mluau::MaybeSend + MaybeSync + Clone + 'static,
+    R: mluau::IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+    FR: futures_util::Future<Output = LuaResult<R>> + mluau::MaybeSend + MaybeSync + 'static,
 {
     lua.create_function(move |lua, args| {
         let func_ref = func.clone();
@@ -64,19 +64,19 @@ pub trait LuaSchedulerAsync {
      */
     fn create_scheduler_async_function<A, F, R, FR>(&self, func: F) -> LuaResult<LuaFunction>
     where
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static;
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        F: Fn(Lua, A) -> FR + mluau::MaybeSend + MaybeSync + Clone + 'static,
+        R: mluau::IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mluau::MaybeSend + MaybeSync + 'static;
 }
 
 impl LuaSchedulerAsync for Lua {
     fn create_scheduler_async_function<A, F, R, FR>(&self, func: F) -> LuaResult<LuaFunction>
     where
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        F: Fn(Lua, A) -> FR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-        R: mlua::IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        FR: futures_util::Future<Output = LuaResult<R>> + mlua::MaybeSend + MaybeSync + 'static,
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        F: Fn(Lua, A) -> FR + mluau::MaybeSend + MaybeSync + Clone + 'static,
+        R: mluau::IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        FR: futures_util::Future<Output = LuaResult<R>> + mluau::MaybeSend + MaybeSync + 'static,
     {
         create_async_lua_function(self, func)
     }
@@ -85,39 +85,39 @@ impl LuaSchedulerAsync for Lua {
 pub trait LuaSchedulerAsyncUserData<T> {
     fn add_scheduler_async_method<M, A, MR, R>(&mut self, name: impl ToString, method: M)
     where
-        T: 'static + mlua::MaybeSend,
-        M: Fn(Lua, mlua::UserDataRef<T>, A) -> MR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + MaybeSync + 'static,
-        R: IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static;
+        T: 'static + mluau::MaybeSend,
+        M: Fn(Lua, mluau::UserDataRef<T>, A) -> MR + mluau::MaybeSend + MaybeSync + Clone + 'static,
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        MR: std::future::Future<Output = mluau::Result<R>> + mluau::MaybeSend + MaybeSync + 'static,
+        R: IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static;
 
     fn add_scheduler_async_method_mut<M, A, MR, R>(&mut self, name: impl ToString, method: M)
     where
-        T: 'static + mlua::MaybeSend,
-        M: Fn(Lua, mlua::UserDataRefMut<T>, A) -> MR
-            + mlua::MaybeSend
+        T: 'static + mluau::MaybeSend,
+        M: Fn(Lua, mluau::UserDataRefMut<T>, A) -> MR
+            + mluau::MaybeSend
             + MaybeSync
             + Clone
             + 'static,
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + MaybeSync + 'static,
-        R: IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static;
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        MR: std::future::Future<Output = mluau::Result<R>> + mluau::MaybeSend + MaybeSync + 'static,
+        R: IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static;
 }
 
 impl<T, I> LuaSchedulerAsyncUserData<T> for I
 where
     I: LuaUserDataMethods<T>,
-    T: 'static + mlua::MaybeSend,
+    T: 'static + mluau::MaybeSend,
 {
     fn add_scheduler_async_method<M, A, MR, R>(&mut self, name: impl ToString, method: M)
     where
-        T: 'static + mlua::MaybeSend,
-        M: Fn(Lua, mlua::UserDataRef<T>, A) -> MR + mlua::MaybeSend + MaybeSync + Clone + 'static,
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + MaybeSync + 'static,
-        R: IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        T: 'static + mluau::MaybeSend,
+        M: Fn(Lua, mluau::UserDataRef<T>, A) -> MR + mluau::MaybeSend + MaybeSync + Clone + 'static,
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        MR: std::future::Future<Output = mluau::Result<R>> + mluau::MaybeSend + MaybeSync + 'static,
+        R: IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
     {
-        self.add_function(name, move |lua, (this, args): (mlua::UserDataRef<T>, A)| {
+        self.add_function(name.to_string(), move |lua, (this, args): (mluau::UserDataRef<T>, A)| {
             let func_ref = method.clone();
 
             let weak_lua = lua.weak();
@@ -162,19 +162,19 @@ where
 
     fn add_scheduler_async_method_mut<M, A, MR, R>(&mut self, name: impl ToString, method: M)
     where
-        T: 'static + mlua::MaybeSend,
-        M: Fn(Lua, mlua::UserDataRefMut<T>, A) -> MR
-            + mlua::MaybeSend
+        T: 'static + mluau::MaybeSend,
+        M: Fn(Lua, mluau::UserDataRefMut<T>, A) -> MR
+            + mluau::MaybeSend
             + MaybeSync
             + Clone
             + 'static,
-        A: FromLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
-        MR: std::future::Future<Output = mlua::Result<R>> + mlua::MaybeSend + MaybeSync + 'static,
-        R: IntoLuaMulti + mlua::MaybeSend + MaybeSync + 'static,
+        A: FromLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
+        MR: std::future::Future<Output = mluau::Result<R>> + mluau::MaybeSend + MaybeSync + 'static,
+        R: IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
     {
         self.add_function(
-            name,
-            move |lua, (this, args): (mlua::UserDataRefMut<T>, A)| {
+            name.to_string(),
+            move |lua, (this, args): (mluau::UserDataRefMut<T>, A)| {
                 let func_ref = method.clone();
 
                 let weak_lua = lua.weak();
@@ -222,7 +222,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mlua::Lua;
+    use mluau::Lua;
 
     #[test]
     fn test_create_scheduler_async_function() {
@@ -245,8 +245,8 @@ mod tests {
         task_mgr.attach().expect("Failed to attach task manager");
 
         pub struct MyData(i32);
-        impl mlua::UserData for MyData {
-            fn add_methods<'lua, M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        impl mluau::UserData for MyData {
+            fn add_methods<'lua, M: mluau::UserDataMethods<Self>>(methods: &mut M) {
                 methods.add_scheduler_async_method("test", async |_, this, _: ()| Ok(this.0));
             }
         }

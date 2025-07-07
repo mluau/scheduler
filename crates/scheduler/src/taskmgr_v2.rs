@@ -13,35 +13,35 @@ use tokio_util::time::delay_queue::Key as DelayQueueKey;
 use tokio_util::time::DelayQueue;
 
 pub struct WaitingThread {
-    delay_args: Option<mlua::MultiValue>,
+    delay_args: Option<mluau::MultiValue>,
     start_at: std::time::Instant,
-    thread: mlua::Thread,
+    thread: mluau::Thread,
 }
 
 pub struct DeferredThread {
-    thread: mlua::Thread,
-    args: mlua::MultiValue,
+    thread: mluau::Thread,
+    args: mluau::MultiValue,
     xid: crate::XId,
 }
 
 pub enum SchedulerEvent {
     // task.wait / task.delay semantics
     Wait {
-        delay_args: Option<mlua::MultiValue>,
-        thread: mlua::Thread,
+        delay_args: Option<mluau::MultiValue>,
+        thread: mluau::Thread,
         start_at: std::time::Instant,
         duration: std::time::Duration,
     },
     DeferredThread {
-        thread: mlua::Thread,
-        args: mlua::MultiValue,
+        thread: mluau::Thread,
+        args: mluau::MultiValue,
     },
     AddAsync {
-        thread: mlua::Thread,
+        thread: mluau::Thread,
         #[cfg(feature = "send")]
-        fut: Pin<Box<dyn Future<Output = mlua::Result<mlua::MultiValue>> + Send + Sync>>,
+        fut: Pin<Box<dyn Future<Output = mluau::Result<mluau::MultiValue>> + Send + Sync>>,
         #[cfg(not(feature = "send"))]
-        fut: Pin<Box<dyn Future<Output = mlua::Result<mlua::MultiValue>>>>,
+        fut: Pin<Box<dyn Future<Output = mluau::Result<mluau::MultiValue>>>>,
     },
     Clear {},
     Close {},
@@ -67,7 +67,7 @@ impl<T> InnerFlumeRecv<T> {
 
 /// Inner scheduler v2
 pub struct CoreScheduler {
-    lua: mlua::WeakLua,
+    lua: mluau::WeakLua,
 
     returns: ReturnTracker,
 
@@ -105,7 +105,7 @@ pub struct CoreScheduler {
 
 impl CoreScheduler {
     /// Creates a new task manager
-    pub fn new(lua: mlua::WeakLua, returns: ReturnTracker) -> Self {
+    pub fn new(lua: mluau::WeakLua, returns: ReturnTracker) -> Self {
         #[cfg(not(feature = "v2_taskmgr_flume"))]
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         #[cfg(feature = "v2_taskmgr_flume")]
@@ -311,7 +311,7 @@ impl CoreScheduler {
                     match resp {
                         Ok((thread, async_resp)) => {
                             match thread.status() {
-                                mlua::ThreadStatus::Error | mlua::ThreadStatus::Finished => {}
+                                mluau::ThreadStatus::Error | mluau::ThreadStatus::Finished => {}
                                 _ => {
                                     match async_resp {
                                         Ok(resp) => {
@@ -322,7 +322,7 @@ impl CoreScheduler {
                                             );
                                         },
                                         Err(e) => {
-                                            let r = thread.resume_error::<mlua::MultiValue>(e.to_string());
+                                            let r = thread.resume_error::<mluau::MultiValue>(e.to_string());
                                             self.returns.push_result(
                                                 &thread,
                                                 r,
@@ -341,7 +341,7 @@ impl CoreScheduler {
                                 error_payload = format!("Error in async thread: {error}");
                             }
 
-                            let r = thread.resume_error::<mlua::MultiValue>(error_payload);
+                            let r = thread.resume_error::<mluau::MultiValue>(error_payload);
                             self.returns.push_result(
                                 &thread,
                                 r,
@@ -365,7 +365,7 @@ impl CoreScheduler {
     }
 
     /// Returns the inner WeakLua reference
-    pub fn lua(&self) -> &mlua::WeakLua {
+    pub fn lua(&self) -> &mluau::WeakLua {
         &self.lua
     }
 

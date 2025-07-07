@@ -4,12 +4,12 @@ use std::collections::HashMap;
 #[allow(clippy::type_complexity)]
 pub struct ReturnTracker {
     inner: XRc<
-        XRefCell<HashMap<XId, tokio::sync::mpsc::UnboundedSender<mlua::Result<mlua::MultiValue>>>>,
+        XRefCell<HashMap<XId, tokio::sync::mpsc::UnboundedSender<mluau::Result<mluau::MultiValue>>>>,
     >,
     wildcard: XRc<
         XRefCell<
             Option<
-                tokio::sync::mpsc::UnboundedSender<(mlua::Thread, mlua::Result<mlua::MultiValue>)>,
+                tokio::sync::mpsc::UnboundedSender<(mluau::Thread, mluau::Result<mluau::MultiValue>)>,
             >,
         >,
     >,
@@ -33,8 +33,8 @@ impl ReturnTracker {
     /// Track a threads result
     pub fn track_thread(
         &self,
-        th: &mlua::Thread,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<mlua::Result<mlua::MultiValue>> {
+        th: &mluau::Thread,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<mluau::Result<mluau::MultiValue>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.inner
             .borrow_mut()
@@ -45,7 +45,7 @@ impl ReturnTracker {
 
     pub fn track_wildcard_thread(
         &self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<(mlua::Thread, mlua::Result<mlua::MultiValue>)> {
+    ) -> tokio::sync::mpsc::UnboundedReceiver<(mluau::Thread, mluau::Result<mluau::MultiValue>)> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut inner = self.wildcard.borrow_mut();
         *inner = Some(tx);
@@ -55,14 +55,14 @@ impl ReturnTracker {
     /// Set a wildcard sender for all threads
     pub fn set_wildcard_sender(
         &self,
-        sender: tokio::sync::mpsc::UnboundedSender<(mlua::Thread, mlua::Result<mlua::MultiValue>)>,
+        sender: tokio::sync::mpsc::UnboundedSender<(mluau::Thread, mluau::Result<mluau::MultiValue>)>,
     ) {
         let mut inner = self.wildcard.borrow_mut();
         *inner = Some(sender);
     }
 
     /// Push a result to the tracked thread
-    pub fn push_result(&self, th: &mlua::Thread, result: mlua::Result<mlua::MultiValue>) {
+    pub fn push_result(&self, th: &mluau::Thread, result: mluau::Result<mluau::MultiValue>) {
         log::trace!("ThreadTracker: Pushing result to thread {th:?}");
 
         {
@@ -99,21 +99,21 @@ impl std::ops::Deref for TaskManager {
 
 impl TaskManager {
     /// Creates a new task manager
-    pub fn new(lua: &mlua::Lua, returns: ReturnTracker) -> Self {
+    pub fn new(lua: &mluau::Lua, returns: ReturnTracker) -> Self {
         Self {
             inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).into(),
         }
     }
 
     /// Tries to get strong ref to lua
-    pub fn get_lua(&self) -> Option<mlua::Lua> {
+    pub fn get_lua(&self) -> Option<mluau::Lua> {
         self.inner.lua().try_upgrade()
     }
 
     /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
-    pub fn attach(&self) -> Result<(), mlua::Error> {
+    pub fn attach(&self) -> Result<(), mluau::Error> {
         let Some(lua) = self.get_lua() else {
-            return Err(mlua::Error::RuntimeError(
+            return Err(mluau::Error::RuntimeError(
                 "Failed to upgrade lua".to_string(),
             ));
         };
@@ -140,8 +140,8 @@ impl TaskManager {
     #[inline]
     pub fn add_waiting_thread(
         &self,
-        thread: mlua::Thread,
-        delay_args: Option<mlua::MultiValue>,
+        thread: mluau::Thread,
+        delay_args: Option<mluau::MultiValue>,
         duration: std::time::Duration,
     ) {
         self.inner
@@ -155,14 +155,14 @@ impl TaskManager {
 
     /// Cancels a thread that is waiting in the task manager
     #[inline]
-    pub fn cancel_task(&self, thread: &mlua::Thread) {
+    pub fn cancel_task(&self, thread: &mluau::Thread) {
         self.inner
             .cancel_task(crate::XId::from_ptr(thread.to_pointer()));
     }
 
     /// Adds a deferred thread to the task manager to the front of the queue
     #[inline]
-    pub fn add_deferred_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+    pub fn add_deferred_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         self.inner
             .push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread { args, thread });
     }
@@ -208,7 +208,7 @@ impl TaskManager {
     }
 
     /// Spawns a thread, discarding its output entirely
-    pub async fn spawn_thread(&self, thread: mlua::Thread, args: mlua::MultiValue) {
+    pub async fn spawn_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         let resp = thread.resume(args);
 
         self.returns().push_result(&thread, resp);
@@ -219,16 +219,16 @@ impl TaskManager {
     /// This requires ThreadTracker to be attached to the scheduler
     pub async fn spawn_thread_and_wait(
         &self,
-        thread: mlua::Thread,
-        args: mlua::MultiValue,
-    ) -> Result<Option<mlua::Result<mlua::MultiValue>>, mlua::Error> {
+        thread: mluau::Thread,
+        args: mluau::MultiValue,
+    ) -> Result<Option<mluau::Result<mluau::MultiValue>>, mluau::Error> {
         let mut rx = self.returns().track_thread(&thread);
 
         let result = thread.resume(args);
 
         self.returns().push_result(&thread, result);
 
-        let mut value: Option<mlua::Result<mlua::MultiValue>> = None;
+        let mut value: Option<mluau::Result<mluau::MultiValue>> = None;
 
         loop {
             let Some(next) = rx.recv().await else {
@@ -244,7 +244,7 @@ impl TaskManager {
             value = Some(next);
 
             let status = thread.status();
-            if (status == mlua::ThreadStatus::Finished || status == mlua::ThreadStatus::Error)
+            if (status == mluau::ThreadStatus::Finished || status == mluau::ThreadStatus::Error)
                 && rx.is_empty()
             {
                 log::trace!("Status: {status:?}");
@@ -256,7 +256,7 @@ impl TaskManager {
     }
 }
 
-pub fn get(lua: &'_ mlua::Lua) -> mlua::AppDataRef<'_, TaskManager> {
+pub fn get(lua: &'_ mluau::Lua) -> mluau::AppDataRef<'_, TaskManager> {
     lua.app_data_ref::<TaskManager>()
         .expect("Failed to get task manager")
 }

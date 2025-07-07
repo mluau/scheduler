@@ -1,5 +1,5 @@
 use clap::Parser;
-use mlua::prelude::*;
+use mluau::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
 use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
@@ -16,7 +16,7 @@ struct Cli {
     path: Vec<PathBuf>,
 }
 
-async fn spawn_script(lua: &mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Result<()> {
+async fn spawn_script(lua: &mluau::Lua, path: PathBuf, g: LuaTable) -> mluau::Result<()> {
     let f = lua
         .load(fs::read_to_string(&path).await?)
         .set_name(fs::canonicalize(&path).await?.to_string_lossy())
@@ -28,7 +28,7 @@ async fn spawn_script(lua: &mlua::Lua, path: PathBuf, g: LuaTable) -> mlua::Resu
 
     let scheduler = mlua_scheduler::taskmgr::get(lua);
     let output = scheduler
-        .spawn_thread_and_wait(th, mlua::MultiValue::new())
+        .spawn_thread_and_wait(th, mluau::MultiValue::new())
         .await;
 
     println!("Output: {output:?}");
@@ -45,13 +45,13 @@ fn main() {
     println!("Running script: {:?}", cli.path);
 
     let async_closure = async {
-        let lua = mlua::Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+        let lua = mluau::Lua::new_with(mluau::StdLib::ALL_SAFE, mluau::LuaOptions::default())
             .expect("Failed to create Lua");
 
         #[cfg(feature = "ncg")]
         lua.enable_jit(true);
 
-        let compiler = mlua::Compiler::new().set_optimization_level(2);
+        let compiler = mluau::Compiler::new().set_optimization_level(2);
 
         lua.set_compiler(compiler);
 
@@ -91,7 +91,7 @@ fn main() {
                 "_TEST_ASYNC_WORK",
                 lua.create_scheduler_async_function(|_lua, mut n: f64| async move {
                     if n < 0.0 {
-                        return Err(mlua::Error::external("Negative sleep time"));
+                        return Err(mluau::Error::external("Negative sleep time"));
                     }
                     if n < 0.05 {
                         n = 0.10; // Minimum sleep time
@@ -112,7 +112,7 @@ fn main() {
                     if n % 10 == 3 {
                         return Ok(format!("Y{n}"));
                     }
-                    Err(mlua::Error::external(n.to_string()))
+                    Err(mluau::Error::external(n.to_string()))
                 })
                 .expect("Failed to create async function"),
             )
@@ -175,7 +175,7 @@ fn main() {
             .expect("Failed to set __newindex");
 
         // Set __index on global_tab to point to _G
-        global_tab.set_metatable(Some(global_mt));
+        global_tab.set_metatable(Some(global_mt)).expect("Failed to set metatable");
 
         for path in cli.path {
             spawn_script(&lua, path, global_tab.clone())

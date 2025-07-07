@@ -1,4 +1,4 @@
-use mlua::prelude::*;
+use mluau::prelude::*;
 
 /// Creates the `task` library, patching coroutine.resume to handle on_response signals as appropriate.
 pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
