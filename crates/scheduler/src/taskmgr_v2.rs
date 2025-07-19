@@ -96,11 +96,13 @@ pub struct CoreScheduler {
     cancel_rx: XRefCell<Option<InnerFlumeRecv<crate::XId>>>,
 
     // Cancellation channel
-    #[cfg(not(feature = "v2_taskmgr_flume"))]
     cancel: XRefCell<HashSet<XId>>,
 
     done_tx: Sender<bool>,
     done_rx: tokio::sync::RwLock<Receiver<bool>>,
+
+    start_tx: Sender<bool>,
+    start_rx: tokio::sync::RwLock<Receiver<bool>>,
 }
 
 impl CoreScheduler {
@@ -117,6 +119,7 @@ impl CoreScheduler {
         let (cancel_tx, cancel_rx) = flume::unbounded();
 
         let (done_tx, done_rx) = tokio::sync::watch::channel(true);
+        let (start_tx, start_rx) = tokio::sync::watch::channel(false);
         Self {
             lua,
             returns,
@@ -140,11 +143,23 @@ impl CoreScheduler {
             cancel: XRefCell::new(HashSet::new()),
             done_tx,
             done_rx: tokio::sync::RwLock::new(done_rx),
+            start_tx,
+            start_rx: tokio::sync::RwLock::new(start_rx),
         }
     }
 
     /// Runs the task manager
-    pub(crate) async fn run(&self) {
+    pub async fn run(&self) {
+        // Before doing anything, check if the task manager is already running or cancelled
+        //
+        // If so, we can exit early
+        if self.is_running() || self.is_cancelled() || !self.check_lua() {
+            log::warn!("Task manager is already running or cancelled, exiting early");
+            return;
+        }
+
+        log::debug!("Firing up task manager");
+
         let mut rx = self.rx.borrow_mut().take().expect("No reciever found");
         let mut cancel_rx = self
             .cancel_rx
@@ -161,12 +176,8 @@ impl CoreScheduler {
         ) = unbounded_channel();
         let mut known_deferred_threads: HashSet<XId> = HashSet::new();
 
-        if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            self.done_tx.send_replace(true);
-            return; // Quick exit
-        }
-
         self.is_running.set(true);
+        self.start_tx.send_replace(true);
 
         loop {
             if self.is_cancelled() || !self.check_lua() {
@@ -369,8 +380,13 @@ impl CoreScheduler {
         &self.lua
     }
 
+    /// Tries to get strong ref to lua
+    pub fn get_lua(&self) -> Option<mluau::Lua> {
+        self.lua.try_upgrade()
+    }
+
     /// Checks if the lua state is valid
-    fn check_lua(&self) -> bool {
+    pub fn check_lua(&self) -> bool {
         self.lua.try_upgrade().is_some()
     }
 
@@ -399,6 +415,11 @@ impl CoreScheduler {
         self.is_cancelled.set(true);
     }
 
+    /// Unstops the task manager
+    pub fn unstop(&self) {
+        self.set_cancelled(false);
+    }
+
     /// Returns the return tracker stored in the task manager
     pub fn returns(&self) -> &ReturnTracker {
         &self.returns
@@ -410,12 +431,31 @@ impl CoreScheduler {
         let _ = self.tx.send(event);
     }
 
-    /// Cancels a task by its ID
-    pub fn cancel_task(&self, xid: XId) {
+    /// Cancels a thread
+    pub fn cancel_thread(&self, thread: &mluau::Thread) -> Result<(), mluau::Error> {
+        let Some(lua) = self.get_lua() else {
+            return Err(mluau::Error::RuntimeError(
+                "Failed to upgrade lua".to_string(),
+            ));
+        };
+        thread.reset(lua.create_function(|_lua, _: ()| Ok(()))?)?;
+        let xid = XId::from_ptr(thread.to_pointer());
         self.cancel.borrow_mut().insert(xid.clone());
         self.cancel_tx
             .send(xid)
-            .expect("Failed to send cancel task");
+            .map_err(|_| mluau::Error::RuntimeError("Failed to send cancel request".to_string()))?;
+        Ok(())
+    }
+
+    /// Clears the task manager queues completely
+    pub fn clear(&self) {
+        self.push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
+    }
+
+    pub async fn wait_for_start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut start_rx = self.start_rx.write().await;
+        start_rx.changed().await?;
+        Ok(())
     }
 
     pub async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

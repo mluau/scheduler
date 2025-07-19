@@ -4,12 +4,17 @@ use std::collections::HashMap;
 #[allow(clippy::type_complexity)]
 pub struct ReturnTracker {
     inner: XRc<
-        XRefCell<HashMap<XId, tokio::sync::mpsc::UnboundedSender<mluau::Result<mluau::MultiValue>>>>,
+        XRefCell<
+            HashMap<XId, tokio::sync::mpsc::UnboundedSender<mluau::Result<mluau::MultiValue>>>,
+        >,
     >,
     wildcard: XRc<
         XRefCell<
             Option<
-                tokio::sync::mpsc::UnboundedSender<(mluau::Thread, mluau::Result<mluau::MultiValue>)>,
+                tokio::sync::mpsc::UnboundedSender<(
+                    mluau::Thread,
+                    mluau::Result<mluau::MultiValue>,
+                )>,
             >,
         >,
     >,
@@ -45,7 +50,8 @@ impl ReturnTracker {
 
     pub fn track_wildcard_thread(
         &self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<(mluau::Thread, mluau::Result<mluau::MultiValue>)> {
+    ) -> tokio::sync::mpsc::UnboundedReceiver<(mluau::Thread, mluau::Result<mluau::MultiValue>)>
+    {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut inner = self.wildcard.borrow_mut();
         *inner = Some(tx);
@@ -55,7 +61,10 @@ impl ReturnTracker {
     /// Set a wildcard sender for all threads
     pub fn set_wildcard_sender(
         &self,
-        sender: tokio::sync::mpsc::UnboundedSender<(mluau::Thread, mluau::Result<mluau::MultiValue>)>,
+        sender: tokio::sync::mpsc::UnboundedSender<(
+            mluau::Thread,
+            mluau::Result<mluau::MultiValue>,
+        )>,
     ) {
         let mut inner = self.wildcard.borrow_mut();
         *inner = Some(sender);
@@ -105,11 +114,6 @@ impl TaskManager {
         }
     }
 
-    /// Tries to get strong ref to lua
-    pub fn get_lua(&self) -> Option<mluau::Lua> {
-        self.inner.lua().try_upgrade()
-    }
-
     /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
     pub fn attach(&self) -> Result<(), mluau::Error> {
         let Some(lua) = self.get_lua() else {
@@ -119,21 +123,6 @@ impl TaskManager {
         };
         lua.set_app_data(self.clone());
         Ok(())
-    }
-
-    /// Returns whether the task manager has been cancelled
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.is_cancelled()
-    }
-
-    /// Returns whether the task manager is running
-    pub fn is_running(&self) -> bool {
-        self.inner.is_running()
-    }
-
-    /// Returns the returns stored in the task manager
-    pub fn returns(&self) -> &ReturnTracker {
-        self.inner.returns()
     }
 
     /// Adds a waiting thread to the task manager
@@ -153,13 +142,6 @@ impl TaskManager {
             });
     }
 
-    /// Cancels a thread that is waiting in the task manager
-    #[inline]
-    pub fn cancel_task(&self, thread: &mluau::Thread) {
-        self.inner
-            .cancel_task(crate::XId::from_ptr(thread.to_pointer()));
-    }
-
     /// Adds a deferred thread to the task manager to the front of the queue
     #[inline]
     pub fn add_deferred_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
@@ -172,8 +154,6 @@ impl TaskManager {
             return;
         }
 
-        log::debug!("Firing up task manager");
-
         let self_ref = self.clone();
 
         #[cfg(feature = "send")]
@@ -184,27 +164,6 @@ impl TaskManager {
         tokio::task::spawn_local(async move {
             self_ref.run().await;
         });
-    }
-
-    /// Checks if the lua state is valid
-    fn check_lua(&self) -> bool {
-        self.inner.lua().try_upgrade().is_some()
-    }
-
-    /// Stops the task manager
-    pub fn stop(&self) {
-        self.set_cancelled(true);
-    }
-
-    /// Unstops the task manager
-    pub fn unstop(&self) {
-        self.set_cancelled(false);
-    }
-
-    /// Clears the task manager queues completely
-    pub fn clear(&self) {
-        self.inner
-            .push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
     }
 
     /// Spawns a thread, discarding its output entirely

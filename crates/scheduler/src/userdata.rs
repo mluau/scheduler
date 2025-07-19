@@ -15,9 +15,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 Err(r) => (false, r).into_lua_multi(lua),
             };
 
-            taskmgr_ref
-                .returns()
-                .push_result(&coroutine, resp.clone());
+            taskmgr_ref.returns().push_result(&coroutine, resp.clone());
 
             resp
         })?,
@@ -109,16 +107,11 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     let taskmgr_ref = taskmgr_parent.clone();
-    let coro_close_fn = lua
-        .globals()
-        .get::<LuaTable>("coroutine")?
-        .get::<LuaFunction>("close")?;
 
     table.set(
         "cancel",
         lua.create_function(move |_lua, thread: LuaThread| {
-            taskmgr_ref.cancel_task(&thread);
-            coro_close_fn.call::<()>(thread)?;
+            taskmgr_ref.cancel_thread(&thread)?;
             Ok(())
         })?,
     )?;

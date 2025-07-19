@@ -117,47 +117,50 @@ where
         MR: std::future::Future<Output = mluau::Result<R>> + mluau::MaybeSend + MaybeSync + 'static,
         R: IntoLuaMulti + mluau::MaybeSend + MaybeSync + 'static,
     {
-        self.add_function(name.to_string(), move |lua, (this, args): (mluau::UserDataRef<T>, A)| {
-            let func_ref = method.clone();
+        self.add_function(
+            name.to_string(),
+            move |lua, (this, args): (mluau::UserDataRef<T>, A)| {
+                let func_ref = method.clone();
 
-            let weak_lua = lua.weak();
+                let weak_lua = lua.weak();
 
-            let fut = async move {
-                let Some(lua) = weak_lua.try_upgrade() else {
-                    return Err(LuaError::RuntimeError(
-                        "Lua instance is no longer valid".to_string(),
-                    ));
+                let fut = async move {
+                    let Some(lua) = weak_lua.try_upgrade() else {
+                        return Err(LuaError::RuntimeError(
+                            "Lua instance is no longer valid".to_string(),
+                        ));
+                    };
+
+                    match (func_ref)(lua, this, args).await {
+                        Ok(res) => {
+                            let Some(lua) = weak_lua.try_upgrade() else {
+                                return Err(LuaError::RuntimeError(
+                                    "Lua instance is no longer valid".to_string(),
+                                ));
+                            };
+
+                            res.into_lua_multi(&lua)
+                        }
+                        Err(e) => Err(e),
+                    }
                 };
 
-                match (func_ref)(lua, this, args).await {
-                    Ok(res) => {
-                        let Some(lua) = weak_lua.try_upgrade() else {
-                            return Err(LuaError::RuntimeError(
-                                "Lua instance is no longer valid".to_string(),
-                            ));
-                        };
+                let taskmgr = lua
+                    .app_data_ref::<TaskManager>()
+                    .expect("Failed to get task manager")
+                    .clone();
 
-                        res.into_lua_multi(&lua)
-                    }
-                    Err(e) => Err(e),
-                }
-            };
+                taskmgr
+                    .inner
+                    .push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
+                        thread: lua.current_thread(),
+                        fut: Box::pin(fut),
+                    });
 
-            let taskmgr = lua
-                .app_data_ref::<TaskManager>()
-                .expect("Failed to get task manager")
-                .clone();
-
-            taskmgr
-                .inner
-                .push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
-                    thread: lua.current_thread(),
-                    fut: Box::pin(fut),
-                });
-
-            lua.yield_with(())?;
-            Ok(())
-        });
+                lua.yield_with(())?;
+                Ok(())
+            },
+        );
     }
 
     fn add_scheduler_async_method_mut<M, A, MR, R>(&mut self, name: impl ToString, method: M)
@@ -234,21 +237,5 @@ mod tests {
 
         let func = lua.create_scheduler_async_function(|_lua, _args: ()| async { Ok(()) });
         assert!(func.is_ok());
-    }
-
-    #[test]
-    fn test_userdata_create() {
-        let lua = Lua::new();
-
-        let task_mgr: TaskManager = TaskManager::new(&lua, crate::ReturnTracker::new());
-
-        task_mgr.attach().expect("Failed to attach task manager");
-
-        pub struct MyData(i32);
-        impl mluau::UserData for MyData {
-            fn add_methods<'lua, M: mluau::UserDataMethods<Self>>(methods: &mut M) {
-                methods.add_scheduler_async_method("test", async |_, this, _: ()| Ok(this.0));
-            }
-        }
     }
 }

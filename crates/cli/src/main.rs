@@ -1,6 +1,6 @@
 use clap::Parser;
-use mluau::prelude::*;
 use mlua_scheduler::LuaSchedulerAsync;
+use mluau::prelude::*;
 use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
 
@@ -81,6 +81,10 @@ fn main() {
 
         task_mgr.attach().expect("Failed to attach task manager");
         task_mgr.run_in_task();
+        task_mgr
+            .wait_for_start()
+            .await
+            .expect("Failed to wait for task manager to start");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
@@ -175,7 +179,9 @@ fn main() {
             .expect("Failed to set __newindex");
 
         // Set __index on global_tab to point to _G
-        global_tab.set_metatable(Some(global_mt)).expect("Failed to set metatable");
+        global_tab
+            .set_metatable(Some(global_mt))
+            .expect("Failed to set metatable");
 
         for path in cli.path {
             spawn_script(&lua, path, global_tab.clone())
