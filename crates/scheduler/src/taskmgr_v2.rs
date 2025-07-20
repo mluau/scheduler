@@ -154,7 +154,12 @@ impl CoreScheduler {
         //
         // If so, we can exit early
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            log::warn!("Task manager is already running or cancelled, exiting early");
+            log::debug!("Task manager is already running or cancelled, exiting early");
+
+            // Tell callers the scheduler is already up
+            if self.is_running() {
+                self.start_tx.send_replace(true); 
+            }
             return;
         }
 
