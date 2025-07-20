@@ -166,6 +166,33 @@ impl TaskManager {
         });
     }
 
+    pub async fn run_in_task_and_wait(&self) -> Result<(), mluau::Error> {
+        if self.is_cancelled() || !self.check_lua() {
+            return Err(mluau::Error::RuntimeError("Lua instance not present or scheduler has been cancelled"))
+        }
+        
+        if !self.is_running() {
+            log::info!("Scheduler not running, running it now");
+
+            let self_ref = self.clone();
+
+            #[cfg(feature = "send")]
+            tokio::task::spawn(async move {
+                self_ref.run().await;
+            });
+            #[cfg(not(feature = "send"))]
+            tokio::task::spawn_local(async move {
+                self_ref.run().await;
+            });
+            
+            self.inner.scheduler().wait_for_start().await.map_err(|e| {
+                mluau::Error::RuntimeError(format!("Failed to start scheduler: {e}"))
+            })?;
+
+            log::info!("Scheduler is now UP");
+        }
+    }
+
     /// Spawns a thread, discarding its output entirely
     pub async fn spawn_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         let resp = thread.resume(args);
