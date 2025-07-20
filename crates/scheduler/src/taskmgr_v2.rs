@@ -100,9 +100,6 @@ pub struct CoreScheduler {
 
     done_tx: Sender<bool>,
     done_rx: tokio::sync::RwLock<Receiver<bool>>,
-
-    start_tx: Sender<bool>,
-    start_rx: tokio::sync::RwLock<Receiver<bool>>,
 }
 
 impl CoreScheduler {
@@ -119,7 +116,6 @@ impl CoreScheduler {
         let (cancel_tx, cancel_rx) = flume::unbounded();
 
         let (done_tx, done_rx) = tokio::sync::watch::channel(true);
-        let (start_tx, start_rx) = tokio::sync::watch::channel(false);
         Self {
             lua,
             returns,
@@ -143,13 +139,11 @@ impl CoreScheduler {
             cancel: XRefCell::new(HashSet::new()),
             done_tx,
             done_rx: tokio::sync::RwLock::new(done_rx),
-            start_tx,
-            start_rx: tokio::sync::RwLock::new(start_rx),
         }
     }
 
     /// Runs the task manager
-    pub async fn run(&self) {
+    pub async fn run(&self, start_tx: Option<UnboundedSender<()>>) {
         // Before doing anything, check if the task manager is already running or cancelled
         //
         // If so, we can exit early
@@ -158,7 +152,12 @@ impl CoreScheduler {
 
             // Tell callers the scheduler is already up
             if self.is_running() {
-                self.start_tx.send_replace(true); 
+                if let Some(tx) = start_tx {
+                    let err = tx.send(());
+                    if err.is_err() {
+                        log::warn!("Failed to send start signal, task manager is already running");
+                    }
+                }
             }
             return;
         }
@@ -182,7 +181,13 @@ impl CoreScheduler {
         let mut known_deferred_threads: HashSet<XId> = HashSet::new();
 
         self.is_running.set(true);
-        self.start_tx.send_replace(true);
+
+        if let Some(tx) = start_tx {
+            let err = tx.send(());
+            if err.is_err() {
+                log::warn!("Failed to send start signal, task manager is already running");
+            }
+        }
 
         loop {
             if self.is_cancelled() || !self.check_lua() {
@@ -455,15 +460,6 @@ impl CoreScheduler {
     /// Clears the task manager queues completely
     pub fn clear(&self) {
         self.push_event(crate::taskmgr_v2::SchedulerEvent::Clear {});
-    }
-
-    pub async fn wait_for_start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.is_running() {
-            return Ok(()); // Already running
-        }
-        let mut start_rx = self.start_rx.write().await;
-        start_rx.changed().await?;
-        Ok(())
     }
 
     pub async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

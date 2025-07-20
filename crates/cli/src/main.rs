@@ -80,11 +80,10 @@ fn main() {
         let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, returns_tracker);
 
         task_mgr.attach().expect("Failed to attach task manager");
-        task_mgr.run_in_task();
         task_mgr
-            .wait_for_start()
+            .run_in_task()
             .await
-            .expect("Failed to wait for task manager to start");
+            .expect("Failed to run task manager");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
