@@ -101,7 +101,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 std::time::Duration::from_secs_f64(t.max(0.05))
             });
 
-            taskmgr_ref.add_waiting_thread(thread.clone(), None, duration);
+            taskmgr_ref.add_waiting_thread(thread, None, duration);
             lua.yield_with(())
         })?,
     )?;

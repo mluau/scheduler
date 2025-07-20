@@ -57,6 +57,26 @@ fn main() {
 
         let returns_tracker = mlua_scheduler::taskmgr::ReturnTracker::new();
 
+        let mut wildcard_sender = returns_tracker.track_wildcard_thread();
+
+        #[cfg(feature = "send")]
+        tokio::task::spawn(async move {
+            while let Some((thread, result)) = wildcard_sender.recv().await {
+                if let Err(e) = result {
+                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
+                }
+            }
+        });
+
+        #[cfg(not(feature = "send"))]
+        tokio::task::spawn_local(async move {
+            while let Some((thread, result)) = wildcard_sender.recv().await {
+                if let Err(e) = result {
+                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
+                }
+            }
+        });
+
         let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, returns_tracker);
 
         task_mgr.attach().expect("Failed to attach task manager");
@@ -184,6 +204,7 @@ fn main() {
         println!("Is Lua still alive?: {}", weak_lua.try_upgrade().is_some());
     };
 
+    #[cfg(not(feature = "send"))]
     {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -192,5 +213,14 @@ fn main() {
 
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async_closure);
+    }
+    #[cfg(feature = "send")]
+    {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async_closure);
     }
 }

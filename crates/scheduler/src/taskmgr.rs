@@ -235,7 +235,8 @@ impl TaskManager {
     }
 }
 
-pub fn get(lua: &'_ mluau::Lua) -> mluau::AppDataRef<'_, TaskManager> {
+pub fn get(lua: &'_ mluau::Lua) -> TaskManager {
     lua.app_data_ref::<TaskManager>()
         .expect("Failed to get task manager")
+        .clone()
 }

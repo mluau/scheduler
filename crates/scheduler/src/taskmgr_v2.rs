@@ -191,16 +191,18 @@ impl CoreScheduler {
 
         loop {
             if self.is_cancelled() || !self.check_lua() {
+                log::trace!("Task manager is cancelled or lua is not valid, stopping task manager");
                 self.is_running.set(false);
                 self.done_tx.send_replace(true);
                 return;
             }
 
+            log::trace!("Task manager loop iteration");
             tokio::select! {
                 Some(event) = rx.recv() => {
                     match event {
                         SchedulerEvent::Wait { delay_args, thread, start_at, duration } => {
-                            log::debug!("Adding waiting thread: {:?}", thread.to_pointer());
+                            log::debug!("Adding waiting thread");
                             let Some(_lua) = self.lua.try_upgrade() else {
                                 self.is_running.set(false);
                                 self.done_tx.send_replace(true);
@@ -370,7 +372,7 @@ impl CoreScheduler {
                             );
                         }
                     }
-                },
+                }
             };
 
             if async_queue.is_empty()
@@ -438,13 +440,13 @@ impl CoreScheduler {
 
     /// Adds a waiting thread to the task manager
     pub fn push_event(&self, event: SchedulerEvent) {
-        log::info!("Pushing event");
+        log::trace!("Pushing event");
         self.done_tx.send_replace(false);
         let err = self.tx.send(event);
         if let Err(e) = err {
             log::error!("Failed to push event: {e}");
         } else {
-            log::info!("Event pushed successfully");
+            log::trace!("Event pushed successfully");
         }
     }
 
