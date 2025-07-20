@@ -458,6 +458,9 @@ impl CoreScheduler {
     }
 
     pub async fn wait_for_start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.is_running() {
+            return Ok(()); // Already running
+        }
         let mut start_rx = self.start_rx.write().await;
         start_rx.changed().await?;
         Ok(())
