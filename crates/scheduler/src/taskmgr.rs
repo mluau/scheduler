@@ -178,6 +178,8 @@ impl TaskManager {
                 ));
             };
 
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
             log::info!("Scheduler is now UP");
         }
 

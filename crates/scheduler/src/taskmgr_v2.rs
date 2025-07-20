@@ -200,6 +200,7 @@ impl CoreScheduler {
                 Some(event) = rx.recv() => {
                     match event {
                         SchedulerEvent::Wait { delay_args, thread, start_at, duration } => {
+                            log::debug!("Adding waiting thread: {:?}", thread.to_pointer());
                             let Some(_lua) = self.lua.try_upgrade() else {
                                 self.is_running.set(false);
                                 self.done_tx.send_replace(true);
@@ -369,7 +370,7 @@ impl CoreScheduler {
                             );
                         }
                     }
-                }
+                },
             };
 
             if async_queue.is_empty()
@@ -437,8 +438,14 @@ impl CoreScheduler {
 
     /// Adds a waiting thread to the task manager
     pub fn push_event(&self, event: SchedulerEvent) {
+        log::info!("Pushing event");
         self.done_tx.send_replace(false);
-        let _ = self.tx.send(event);
+        let err = self.tx.send(event);
+        if let Err(e) = err {
+            log::error!("Failed to push event: {e}");
+        } else {
+            log::info!("Event pushed successfully");
+        }
     }
 
     /// Cancels a thread
