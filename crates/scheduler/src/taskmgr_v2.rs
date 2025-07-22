@@ -400,7 +400,7 @@ impl CoreScheduler {
 
     /// Checks if the lua state is valid
     pub fn check_lua(&self) -> bool {
-        self.lua.try_upgrade().is_some()
+        !self.lua.is_destroyed()
     }
 
     /// Returns whether the task manager has been cancelled
@@ -452,12 +452,13 @@ impl CoreScheduler {
 
     /// Cancels a thread
     pub fn cancel_thread(&self, thread: &mluau::Thread) -> Result<(), mluau::Error> {
-        let Some(lua) = self.get_lua() else {
+        if !self.check_lua() {
             return Err(mluau::Error::RuntimeError(
-                "Failed to upgrade lua".to_string(),
+                "Lua instance is not valid!".to_string(),
             ));
         };
-        thread.reset(lua.create_function(|_lua, _: ()| Ok(()))?)?;
+        
+        thread.close()?;
         let xid = XId::from_ptr(thread.to_pointer());
         self.cancel.borrow_mut().insert(xid.clone());
         self.cancel_tx
