@@ -111,20 +111,13 @@ impl std::ops::Deref for TaskManager {
 impl TaskManager {
     /// Creates a new task manager
     pub async fn new(lua: &mluau::Lua, returns: ReturnTracker) -> Result<Self, Error> {
-        Ok(Self {
+        let inner = Self {
             inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).await?,
-        })
-    }
-
-    /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
-    pub fn attach(&self) -> Result<(), mluau::Error> {
-        let Some(lua) = self.get_lua() else {
-            return Err(mluau::Error::RuntimeError(
-                "Failed to upgrade lua".to_string(),
-            ));
         };
-        lua.set_app_data(self.clone());
-        Ok(())
+
+        lua.set_app_data(inner.clone());
+
+        Ok(inner)
     }
 
     /// Adds a waiting thread to the task manager
