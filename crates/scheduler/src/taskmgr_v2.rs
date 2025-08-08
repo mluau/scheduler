@@ -1,5 +1,5 @@
 use crate::taskmgr::ReturnTracker;
-use crate::{XBool, XId, XRefCell};
+use crate::{XBool, XId, XRc, XRefCell};
 use futures_util::stream::FuturesUnordered;
 use futures_util::Future;
 use futures_util::FutureExt;
@@ -11,6 +11,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch::{Receiver, Sender};
 use tokio_util::time::delay_queue::Key as DelayQueueKey;
 use tokio_util::time::DelayQueue;
+use tokio::sync::oneshot::Sender as OneShotSender;
 
 pub struct WaitingThread {
     delay_args: Option<mluau::MultiValue>,
@@ -65,8 +66,7 @@ impl<T> InnerFlumeRecv<T> {
     }
 }
 
-/// Inner scheduler v2
-pub struct CoreScheduler {
+pub struct CoreSchedulerInner {
     lua: mluau::WeakLua,
 
     returns: ReturnTracker,
@@ -78,8 +78,6 @@ pub struct CoreScheduler {
     // tx/rx
     #[cfg(not(feature = "v2_taskmgr_flume"))]
     tx: UnboundedSender<SchedulerEvent>,
-    #[cfg(not(feature = "v2_taskmgr_flume"))]
-    rx: XRefCell<Option<UnboundedReceiver<SchedulerEvent>>>,
     #[cfg(feature = "v2_taskmgr_flume")]
     tx: flume::Sender<SchedulerEvent>,
     #[cfg(feature = "v2_taskmgr_flume")]
@@ -102,9 +100,25 @@ pub struct CoreScheduler {
     done_rx: tokio::sync::RwLock<Receiver<bool>>,
 }
 
+/// Inner scheduler v2
+#[derive(Clone)]
+pub struct CoreScheduler {
+    inner: XRc<CoreSchedulerInner>,
+}
+
+impl std::ops::Deref for CoreScheduler {
+    type Target = CoreSchedulerInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
 impl CoreScheduler {
-    /// Creates a new task manager
-    pub fn new(lua: mluau::WeakLua, returns: ReturnTracker) -> Self {
+    /// Creates a new task manager and spawns it
+    pub async fn new(lua: mluau::WeakLua, returns: ReturnTracker) -> Result<Self, Error> {
         #[cfg(not(feature = "v2_taskmgr_flume"))]
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         #[cfg(feature = "v2_taskmgr_flume")]
@@ -116,19 +130,12 @@ impl CoreScheduler {
         let (cancel_tx, cancel_rx) = flume::unbounded();
 
         let (done_tx, done_rx) = tokio::sync::watch::channel(true);
-        Self {
+        let scheduler_inner = CoreSchedulerInner {
             lua,
             returns,
             is_running: XBool::new(false),
             is_cancelled: XBool::new(false),
-
-            // TX/RX
             tx,
-            #[cfg(not(feature = "v2_taskmgr_flume"))]
-            rx: XRefCell::new(Some(rx)),
-            #[cfg(feature = "v2_taskmgr_flume")]
-            rx: XRefCell::new(Some(InnerFlumeRecv(rx))),
-
             // CANCELLATION TX/RX
             cancel_tx,
             #[cfg(not(feature = "v2_taskmgr_flume"))]
@@ -139,32 +146,56 @@ impl CoreScheduler {
             cancel: XRefCell::new(HashSet::new()),
             done_tx,
             done_rx: tokio::sync::RwLock::new(done_rx),
+        };
+
+        let scheduler = CoreScheduler {
+            inner: XRc::new(scheduler_inner),
+        };
+
+        {
+            let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+            #[cfg(feature = "send")]
+            {
+                tokio::task::spawn({
+                    let scheduler = scheduler.clone();
+                    async move {
+                        scheduler.run(start_tx, rx).await;
+                    }
+                });
+            }
+
+            #[cfg(not(feature = "send"))]
+            {
+                tokio::task::spawn_local({
+                    let scheduler = scheduler.clone();
+                    async move {
+                        scheduler.run(start_tx, rx).await;
+                    }
+                });
+            }
+
+            start_rx.await?;
         }
+
+        Ok(scheduler)
     }
 
     /// Runs the task manager
-    pub async fn run(&self, start_tx: Option<UnboundedSender<()>>) {
+    async fn run(&self, start_tx: OneShotSender<()>, mut rx: UnboundedReceiver<SchedulerEvent>) {
         // Before doing anything, check if the task manager is already running or cancelled
         //
         // If so, we can exit early
         if self.is_running() || self.is_cancelled() || !self.check_lua() {
-            log::debug!("Task manager is already running or cancelled, exiting early");
+            log::error!("Task manager is already running or cancelled, exiting early");
 
-            // Tell callers the scheduler is already up
             if self.is_running() {
-                if let Some(tx) = start_tx {
-                    let err = tx.send(());
-                    if err.is_err() {
-                        log::warn!("Failed to send start signal, task manager is already running");
-                    }
-                }
+                panic!("Task manager is already running, this should not happen");
             }
             return;
         }
 
         log::debug!("Firing up task manager");
 
-        let mut rx = self.rx.borrow_mut().take().expect("No reciever found");
         let mut cancel_rx = self
             .cancel_rx
             .borrow_mut()
@@ -182,12 +213,7 @@ impl CoreScheduler {
 
         self.is_running.set(true);
 
-        if let Some(tx) = start_tx {
-            let err = tx.send(());
-            if err.is_err() {
-                log::warn!("Failed to send start signal, task manager is already running");
-            }
-        }
+        let _ = start_tx.send(());
 
         loop {
             if self.is_cancelled() || !self.check_lua() {

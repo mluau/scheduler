@@ -92,26 +92,28 @@ impl ReturnTracker {
     }
 }
 
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
-    pub(crate) inner: XRc<crate::taskmgr_v2::CoreScheduler>,
+    pub(crate) inner: crate::taskmgr_v2::CoreScheduler,
 }
 
 impl std::ops::Deref for TaskManager {
     type Target = crate::taskmgr_v2::CoreScheduler;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref()
+        &self.inner
     }
 }
 
 impl TaskManager {
     /// Creates a new task manager
-    pub fn new(lua: &mluau::Lua, returns: ReturnTracker) -> Self {
-        Self {
-            inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).into(),
-        }
+    pub async fn new(lua: &mluau::Lua, returns: ReturnTracker) -> Result<Self, Error> {
+        Ok(Self {
+            inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).await?,
+        })
     }
 
     /// Attaches the task manager to the lua state. Note that run_in_task (etc.) must also be called
@@ -147,43 +149,6 @@ impl TaskManager {
     pub fn add_deferred_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         self.inner
             .push_event(crate::taskmgr_v2::SchedulerEvent::DeferredThread { args, thread });
-    }
-
-    pub async fn run_in_task(&self) -> Result<(), mluau::Error> {
-        if self.is_cancelled() || !self.check_lua() {
-            return Err(mluau::Error::RuntimeError(
-                "Lua instance not present or scheduler has been cancelled".into(),
-            ));
-        }
-
-        if !self.is_running() {
-            log::info!("Scheduler not running, running it now");
-
-            let self_ref = self.clone();
-
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            #[cfg(feature = "send")]
-            tokio::task::spawn(async move {
-                self_ref.run(Some(tx)).await;
-            });
-            #[cfg(not(feature = "send"))]
-            tokio::task::spawn_local(async move {
-                self_ref.run(Some(tx)).await;
-            });
-
-            let Some(_) = rx.recv().await else {
-                log::warn!("Failed to receive start signal, task manager may not be running");
-                return Err(mluau::Error::RuntimeError(
-                    "Failed to receive start signal".into(),
-                ));
-            };
-
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-            log::info!("Scheduler is now UP");
-        }
-
-        Ok(())
     }
 
     /// Spawns a thread, discarding its output entirely

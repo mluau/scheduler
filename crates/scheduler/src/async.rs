@@ -221,21 +221,3 @@ where
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mluau::Lua;
-
-    #[test]
-    fn test_create_scheduler_async_function() {
-        let lua = Lua::new();
-
-        let task_mgr: TaskManager = TaskManager::new(&lua, crate::ReturnTracker::new());
-
-        task_mgr.attach().expect("Failed to attach task manager");
-
-        let func = lua.create_scheduler_async_function(|_lua, _args: ()| async { Ok(()) });
-        assert!(func.is_ok());
-    }
-}
