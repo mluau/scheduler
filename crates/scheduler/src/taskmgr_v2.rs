@@ -1,4 +1,5 @@
 use crate::taskmgr::ReturnTracker;
+use crate::taskmgr::Hooks;
 use crate::{XBool, XId, XRc, XRefCell};
 use futures_util::stream::FuturesUnordered;
 use futures_util::Future;
@@ -98,6 +99,9 @@ pub struct CoreSchedulerInner {
 
     done_tx: Sender<bool>,
     done_rx: tokio::sync::RwLock<Receiver<bool>>,
+
+    // Hooks
+    hooks: XRc<dyn Hooks>,
 }
 
 /// Inner scheduler v2
@@ -118,7 +122,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 
 impl CoreScheduler {
     /// Creates a new task manager and spawns it
-    pub async fn new(lua: mluau::WeakLua, returns: ReturnTracker) -> Result<Self, Error> {
+    pub async fn new(lua: mluau::WeakLua, returns: ReturnTracker, hooks: XRc<dyn Hooks>) -> Result<Self, Error> {
         #[cfg(not(feature = "v2_taskmgr_flume"))]
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         #[cfg(feature = "v2_taskmgr_flume")]
@@ -146,6 +150,8 @@ impl CoreScheduler {
             cancel: XRefCell::new(HashSet::new()),
             done_tx,
             done_rx: tokio::sync::RwLock::new(done_rx),
+
+            hooks,
         };
 
         let scheduler = CoreScheduler {
@@ -305,6 +311,7 @@ impl CoreScheduler {
                         continue;
                     }
 
+                    self.hooks.on_resume(&inner.thread);
                     let r = match inner.delay_args {
                         Some(args) => inner.thread.resume(args),
                         None => inner.thread.resume(inner.start_at.elapsed().as_secs_f64())
@@ -342,6 +349,7 @@ impl CoreScheduler {
                     }
 
                     if known_deferred_threads.contains(&deferred_thread.xid) {
+                        self.hooks.on_resume(&deferred_thread.thread);
                         let r = deferred_thread.thread.resume(deferred_thread.args);
                         self.returns.push_result(
                             &deferred_thread.thread,
@@ -365,6 +373,7 @@ impl CoreScheduler {
                                 _ => {
                                     match async_resp {
                                         Ok(resp) => {
+                                            self.hooks.on_resume(&thread);
                                             let r = thread.resume(resp);
                                             self.returns.push_result(
                                                 &thread,
@@ -372,6 +381,7 @@ impl CoreScheduler {
                                             );
                                         },
                                         Err(e) => {
+                                            self.hooks.on_resume(&thread);
                                             let r = thread.resume_error::<mluau::MultiValue>(e.to_string());
                                             self.returns.push_result(
                                                 &thread,
@@ -391,6 +401,7 @@ impl CoreScheduler {
                                 error_payload = format!("Error in async thread: {error}");
                             }
 
+                            self.hooks.on_resume(&thread);
                             let r = thread.resume_error::<mluau::MultiValue>(error_payload);
                             self.returns.push_result(
                                 &thread,

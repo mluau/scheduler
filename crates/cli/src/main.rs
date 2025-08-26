@@ -1,5 +1,5 @@
 use clap::Parser;
-use mlua_scheduler::LuaSchedulerAsync;
+use mlua_scheduler::{taskmgr::NoopHooks, LuaSchedulerAsync, XRc};
 use mluau::prelude::*;
 use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
@@ -77,7 +77,7 @@ fn main() {
             }
         });
 
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, returns_tracker).await.expect("Failed to create task manager");
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, returns_tracker, XRc::new(NoopHooks {})).await.expect("Failed to create task manager");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())

@@ -69,7 +69,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 taskmgr_ref.add_waiting_thread(
                     thread.clone(),
                     Some(args),
-                    std::time::Duration::from_secs_f64(time),
+                    std::time::Duration::from_secs_f64(time.max(0.05)),
                 );
                 Ok(thread)
             },

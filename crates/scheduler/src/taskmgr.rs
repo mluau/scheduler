@@ -1,3 +1,4 @@
+use crate::{MaybeSend, MaybeSync};
 use crate::{XId, XRc, XRefCell};
 use std::collections::HashMap;
 
@@ -94,6 +95,13 @@ impl ReturnTracker {
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
+pub trait Hooks: MaybeSend + MaybeSync {
+    fn on_resume(&self, _thread: &mluau::Thread) {}
+}
+
+pub struct NoopHooks;
+impl Hooks for NoopHooks {}
+
 #[derive(Clone)]
 /// Task Manager
 pub struct TaskManager {
@@ -110,9 +118,9 @@ impl std::ops::Deref for TaskManager {
 
 impl TaskManager {
     /// Creates a new task manager
-    pub async fn new(lua: &mluau::Lua, returns: ReturnTracker) -> Result<Self, Error> {
+    pub async fn new(lua: &mluau::Lua, returns: ReturnTracker, hooks: XRc<dyn Hooks>) -> Result<Self, Error> {
         let inner = Self {
-            inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns).await?,
+            inner: crate::taskmgr_v2::CoreScheduler::new(lua.weak(), returns, hooks).await?,
         };
 
         lua.set_app_data(inner.clone());
