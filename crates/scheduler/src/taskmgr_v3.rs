@@ -199,7 +199,7 @@ impl CoreSchedulerV3 {
         let start_at = Instant::now();            
         self.spawn_tracked(XId::from_ptr(thread.to_pointer()), async move {
             tokio::select! {
-                _ = tokio::time::sleep(duration) => {
+                _ = tokio::time::sleep_until(start_at + duration) => {
                     this.resume_thread_ok(thread, start_at.elapsed().as_secs_f64()); 
                 }
                 _ = this.cancel_token.cancelled() => {
@@ -225,9 +225,10 @@ impl CoreSchedulerV3 {
 
     pub fn schedule_delay(&self, thread: mluau::Thread, duration: Duration, args: mluau::MultiValue) {
         let this = self.clone(); // Cheap Rc clone
+        let start_at = Instant::now();
         self.spawn_tracked(XId::from_ptr(thread.to_pointer()), async move {
             tokio::select! {
-                _ = tokio::time::sleep(duration) => {
+                _ = tokio::time::sleep_until(start_at + duration) => {
                     this.resume_thread_ok(thread, args); 
                 }
                 _ = this.cancel_token.cancelled() => {
