@@ -1,13 +1,10 @@
 mod r#async;
 pub mod taskmgr;
 pub mod userdata;
-
-pub mod taskmgr_v2;
 pub mod taskmgr_v3;
 
 pub use r#async::LuaSchedulerAsync;
 pub use r#async::LuaSchedulerAsyncUserData;
-pub use taskmgr::ReturnTracker;
 pub use taskmgr::TaskManager;
 
 pub const IS_SEND: bool = false;

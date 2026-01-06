@@ -55,9 +55,7 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        let returns_tracker = mlua_scheduler::taskmgr::ReturnTracker::new();
-
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new_v3(&lua, returns_tracker, XRc::new(NoopHooks {})).expect("Failed to create task manager");
+        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, XRc::new(NoopHooks {})).expect("Failed to create task manager");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())

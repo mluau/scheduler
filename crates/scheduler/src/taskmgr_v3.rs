@@ -7,20 +7,40 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use crate::{MaybeSend, MaybeSync, XRc};
+use crate::taskmgr::{ReturnTracker, Hooks};
 
-use crate::MaybeSend;
-use crate::MaybeSync;
-use crate::taskmgr::ReturnTracker;
-use crate::taskmgr::Hooks;
-use crate::XRc;
-
-pub struct ThreadData {
+pub(crate) struct ThreadData {
     cancel_token: CancellationToken,
+    pub(crate) return_tracker: ReturnTracker,
+}
+
+impl ThreadData {
+    /// Returns the underlying thread data if it exists
+    pub fn get_existing(th: &mluau::Thread) -> Option<XRc<ThreadData>> {
+        th.thread_data::<ThreadData>()
+    }
+
+    /// Gets the ThreadData, creating it if it doesn't exist
+    pub fn get<R>(th: &mluau::Thread, f: impl FnOnce(&ThreadData) -> R) -> R {
+        match th.thread_data::<ThreadData>() {
+            Some(data) => (f)(&data),
+            None => {
+                let token = CancellationToken::new();
+                let data = ThreadData {
+                    cancel_token: token,
+                    return_tracker: ReturnTracker::new(),
+                };
+                let r = (f)(&data);
+                let _ = th.set_thread_data(data).expect("internal error: failed to set thread data");
+                r
+            },
+        }
+    }
 }
 
 pub struct CoreSchedulerInnerV3 {
     lua: mluau::WeakLua,
-    returns: ReturnTracker,
     hooks: XRc<dyn Hooks>,
     cancel_token: CancellationToken,
     tracker: TaskTracker,
@@ -42,23 +62,16 @@ impl Deref for CoreSchedulerV3 {
 impl CoreSchedulerV3 {
     pub fn new(
         lua: mluau::WeakLua,
-        returns: ReturnTracker,
         hooks: XRc<dyn Hooks>,
     ) -> Self {
         Self {
             inner: XRc::new(CoreSchedulerInnerV3 {
                 lua,
-                returns,
                 hooks,
                 cancel_token: CancellationToken::new(),
                 tracker: TaskTracker::new(),
             })
         }
-    }
-
-    /// Returns the ReturnTracker
-    pub fn returns(&self) -> &ReturnTracker {
-        &self.returns
     }
 
     /// Tries to get strong ref to lua
@@ -67,12 +80,9 @@ impl CoreSchedulerV3 {
     }
 
     /// Resumes a Lua thread with the given arguments, handling cancellation and Lua state validity
-    fn resume_thread_ok(&self, thread: mluau::Thread, args: impl mluau::IntoLuaMulti) {
-        if self.cancel_token.is_cancelled() { 
-            return; 
-        }
-        
-        if self.lua.try_upgrade().is_none() { 
+    /// If args is Ok(T), resumes with values T; if Err(E), resumes with error E
+    fn resume_thread(&self, thread: mluau::Thread, args: Result<impl mluau::IntoLuaMulti, impl mluau::IntoLua>) {
+        if self.lua.strong_count() == 0 { 
             return; 
         }
 
@@ -81,38 +91,18 @@ impl CoreSchedulerV3 {
         }
 
         self.hooks.on_resume(&thread);
-        if self.returns.is_tracking(&thread) {
-            let result = thread.resume(args);
-            self.returns.push_result(&thread, result);
+        if let Some(data) = ThreadData::get_existing(&thread) && data.return_tracker.is_tracking() {
+            let result = match args {
+                Ok(v) => thread.resume(v),
+                Err(e) => thread.resume_error(e),
+            };
+            let _ = data.return_tracker.push_result(result);
         } else {
             // fast-path: we aren't tracking this thread, so no need to store the result
-            let _ = thread.resume::<()>(args);
-        }
-
-        //self.returns.push_result(&thread, result);
-    }
-
-    /// Resumes a Lua thread with an error, handling cancellation and Lua state validity
-    fn resume_thread_err(&self, thread: mluau::Thread, err: impl mluau::IntoLua) {
-        if self.cancel_token.is_cancelled() { 
-            return; 
-        }
-        
-        if self.lua.try_upgrade().is_none() { 
-            return; 
-        }
-
-        if matches!(thread.status(), mluau::ThreadStatus::Error | mluau::ThreadStatus::Finished) {
-            return;
-        }
-
-        self.hooks.on_resume(&thread);
-        if self.returns.is_tracking(&thread) {
-            let result = thread.resume_error(err);
-            self.returns.push_result(&thread, result);
-        } else {
-            // fast-path: we aren't tracking this thread, so no need to store the result
-            let _ = thread.resume_error::<()>(err);
+            let _ = match args {
+                Ok(v) => thread.resume::<()>(v),
+                Err(e) => thread.resume_error::<()>(e),
+            };
         }
     }
 
@@ -134,29 +124,14 @@ impl CoreSchedulerV3 {
         self.tracker.spawn(task)
     }
 
-    /// Helper method to return a cancellation token for the task associated with the given thread
-    pub fn get_thread_token(&self, thread: &mluau::Thread) -> CancellationToken { 
-        match thread.thread_data::<ThreadData>() {
-            Some(data) => data.cancel_token.clone(),
-            None => {
-                let token = self.cancel_token.child_token();
-                let data = ThreadData {
-                    cancel_token: token.clone(),
-                };
-                let _ = thread.set_thread_data(data).expect("internal error: failed to set thread data");
-                token
-            },
-        }
-    }
-
     pub fn schedule_wait(&self, thread: mluau::Thread, duration: Duration) {
         let this = self.clone(); // Cheap Rc clone
         let start_at = Instant::now();
-        let cancel_token = self.get_thread_token(&thread);         
+        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::time::sleep_until(start_at + duration) => {
-                    this.resume_thread_ok(thread, start_at.elapsed().as_secs_f64()); 
+                    this.resume_thread(thread, Ok::<_, mluau::Error>(start_at.elapsed().as_secs_f64())); 
                 }
                 _ = cancel_token.cancelled() => {
                     // Task was cancelled, do nothing
@@ -167,11 +142,11 @@ impl CoreSchedulerV3 {
 
     pub fn schedule_deferred(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         let this = self.clone();
-        let cancel_token = self.get_thread_token(&thread);
+        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::task::yield_now() => {
-                    this.resume_thread_ok(thread, args); 
+                    this.resume_thread(thread, Ok::<_, mluau::Error>(args)); 
                 }
                 _ = cancel_token.cancelled() => {
                     // Task was cancelled, do nothing
@@ -183,11 +158,11 @@ impl CoreSchedulerV3 {
     pub fn schedule_delay(&self, thread: mluau::Thread, duration: Duration, args: mluau::MultiValue) {
         let this = self.clone(); // Cheap Rc clone
         let start_at = Instant::now();
-        let cancel_token = self.get_thread_token(&thread);
+        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::time::sleep_until(start_at + duration) => {
-                    this.resume_thread_ok(thread, args); 
+                    this.resume_thread(thread, Ok::<_, mluau::Error>(args)); 
                 }
                 _ = cancel_token.cancelled() => {
                     // Task was cancelled, do nothing
@@ -202,13 +177,12 @@ impl CoreSchedulerV3 {
     {
         let fut = std::panic::AssertUnwindSafe(fut).catch_unwind();
         let this = self.clone(); // Cheap Rc clone
-        let cancel_token = self.get_thread_token(&thread);
+        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 res = fut => {
                     match res {
-                        Ok(Ok(vals)) => this.resume_thread_ok(thread, vals),
-                        Ok(Err(err)) => this.resume_thread_err(thread, err),
+                        Ok(val) => this.resume_thread(thread, val),
                         Err(err) => {
                             let mut error_payload = format!("Error in async thread: {err:?}");
                             if let Some(error) = err.downcast_ref::<String>() {
@@ -218,7 +192,7 @@ impl CoreSchedulerV3 {
                                 error_payload = format!("Error in async thread: {error}");
                             }
 
-                            this.resume_thread_err(thread, error_payload);
+                            this.resume_thread(thread, Err::<(), String>(error_payload));
                         },
                     }
                 }
@@ -230,7 +204,7 @@ impl CoreSchedulerV3 {
     }
 
     pub fn cancel_thread(&self, thread: &mluau::Thread) -> bool {
-        match thread.thread_data::<ThreadData>() {
+        match ThreadData::get_existing(thread) {
             Some(data) => {
                 data.cancel_token.cancel();
                 true
