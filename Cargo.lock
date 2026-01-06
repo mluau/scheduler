@@ -368,7 +368,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 [[package]]
 name = "mlua-sys"
 version = "0.9.0"
-source = "git+https://github.com/mluau/mluau#d2a2ed993ed7ee1f8aa9b5f13855d3f6b3330a44"
+source = "git+https://github.com/mluau/mluau#29f8ee8f59b864fca60e644d96bf7781fc001ea8"
 dependencies = [
  "cc",
  "cfg-if",
@@ -403,7 +403,7 @@ dependencies = [
 [[package]]
 name = "mluau"
 version = "0.11.5"
-source = "git+https://github.com/mluau/mluau#d2a2ed993ed7ee1f8aa9b5f13855d3f6b3330a44"
+source = "git+https://github.com/mluau/mluau#29f8ee8f59b864fca60e644d96bf7781fc001ea8"
 dependencies = [
  "bstr",
  "either",

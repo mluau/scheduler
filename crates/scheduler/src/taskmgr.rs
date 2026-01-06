@@ -5,11 +5,10 @@ use std::future::Future;
 
 #[allow(clippy::type_complexity)]
 pub struct ReturnTracker {
-    inner: XRc<
+    inner:
         XRefCell<
             HashMap<XId, tokio::sync::mpsc::UnboundedSender<mluau::Result<mluau::MultiValue>>>,
         >,
-    >,
 }
 
 impl Default for ReturnTracker {
@@ -22,7 +21,7 @@ impl ReturnTracker {
     /// Creates a new return tracker
     pub fn new() -> Self {
         Self {
-            inner: XRc::new(XRefCell::new(HashMap::new())),
+            inner: XRefCell::new(HashMap::new()),
         }
     }
 

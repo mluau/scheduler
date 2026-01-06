@@ -4,7 +4,15 @@ if task == nil then
     if zune then
         task = zune.task
     else 
-        task = require("@lune/task")
+		-- Lune check
+        ok, task = pcall(require, "@lune/task")
+		if not ok then 
+			-- Try lute 
+			ok, task = pcall(require, "@lute/task")
+			if not ok then
+				error("Could not find task library")
+			end
+		end
     end
 end
 
