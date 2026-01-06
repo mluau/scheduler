@@ -14,3 +14,5 @@ print("LUA: Done with _TEST_ASYNC_WORK(2)")
 print("LUA: Wait 5 second")
 task.wait(5)
 print("All done")
+
+return 1

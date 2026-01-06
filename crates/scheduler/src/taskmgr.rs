@@ -2,13 +2,13 @@ use crate::taskmgr_v3::ThreadData;
 use crate::{MaybeSend, MaybeSync, XRefCell};
 use crate::XRc;
 use std::future::Future;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+use tokio::sync::oneshot::{Sender, Receiver, channel};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// A tracker for thread return values
 pub(crate) struct ReturnTracker {
-    return_tracker: XRefCell<Option<UnboundedSender<mluau::Result<mluau::MultiValue>>>>
+    return_tracker: XRefCell<Option<Sender<mluau::Result<mluau::MultiValue>>>>
 }
 
 impl ReturnTracker {
@@ -22,14 +22,18 @@ impl ReturnTracker {
         self.return_tracker.borrow().is_some()
     }
 
-    pub fn push_result(&self, result: mluau::Result<mluau::MultiValue>) {
-        if let Some(tx) = self.return_tracker.borrow().as_ref() {
-            let _ = tx.send(result);
+    // No-op if thread is not finished or not tracked
+    pub fn push_result(&self, th: &mluau::Thread, result: mluau::Result<mluau::MultiValue>) {
+        if matches!(th.status(), mluau::ThreadStatus::Error | mluau::ThreadStatus::Finished) {
+            let v = self.return_tracker.borrow_mut().take();
+            if let Some(tx) = v {
+                let _ = tx.send(result);
+            }
         }
     }
 
-    pub fn track(&self) -> UnboundedReceiver<mluau::Result<mluau::MultiValue>> {
-        let (tx, rx) = unbounded_channel();
+    pub fn track(&self) -> Receiver<mluau::Result<mluau::MultiValue>> {
+        let (tx, rx) = channel();
         let mut tracker = self.return_tracker.borrow_mut();
         *tracker = Some(tx);
         rx
@@ -69,32 +73,27 @@ impl TaskManager {
         Ok(inner)
     }
 
-    fn get_lua(&self) -> Option<mluau::Lua> {
-        match self {
-            TaskManager::V3 { inner } => inner.get_lua(),
-        }
-    }
-
     /// Tracks a thread's return values
     pub(crate) fn track_thread(
         &self,
         th: &mluau::Thread,
-    ) -> UnboundedReceiver<mluau::Result<mluau::MultiValue>> {
+    ) -> Receiver<mluau::Result<mluau::MultiValue>> {
         match self {
-            TaskManager::V3 { .. } => {
-                ThreadData::get(th, |data| data.return_tracker.track())
+            TaskManager::V3 { inner } => {
+                ThreadData::get(&inner, th, |data| data.return_tracker.track())
             },
         }
     }
 
-    /// Pushes a result to a tracked thread
+    /// Pushes a result to a tracked thread. Is a no-op if the thread is not being tracked
+    /// or has not finished yet.
     pub(crate) fn push_result(&self, th: &mluau::Thread, result: mluau::Result<mluau::MultiValue>) {
         match self {
             TaskManager::V3 { .. } => {
                 let Some(data) = ThreadData::get_existing(th) else {
                     return;
                 };
-                data.return_tracker.push_result(result); 
+                data.return_tracker.push_result(th, result); 
             }
         }
     }
@@ -195,35 +194,17 @@ impl TaskManager {
         thread: mluau::Thread,
         args: mluau::MultiValue,
     ) -> mluau::Result<mluau::MultiValue> {
-        let mut rx = self.track_thread(&thread);
+        let rx = self.track_thread(&thread);
 
-        let mut value = thread.resume(args);
+        let value = thread.resume(args);
 
-        loop {
-            if self.get_lua().is_none() {
-                log::trace!("Scheduler is no longer valid, exiting...");
-                break;
-            }
-
-            let status = thread.status();
-            if (status == mluau::ThreadStatus::Finished || status == mluau::ThreadStatus::Error)
-                && rx.is_empty()
-            {
-                log::trace!("Status: {status:?}");
-                break;
-            }
-
-            // Wait for the next result
-            let Some(next) = rx.recv().await else {
-                break;
-            };
-            log::trace!("Received value: {next:?}");
-
-            value = next;
+        if matches!(thread.status(), mluau::ThreadStatus::Error | mluau::ThreadStatus::Finished) {
+            self.stop_tracking_thread(&thread);
+            return value;
         }
 
-        self.stop_tracking_thread(&thread);
-        value
+        let v = rx.await.map_err(|_| mluau::Error::external("Failed to receive thread result"))?;
+        return v;
     }
 }
 

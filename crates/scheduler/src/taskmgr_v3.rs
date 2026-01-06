@@ -22,11 +22,11 @@ impl ThreadData {
     }
 
     /// Gets the ThreadData, creating it if it doesn't exist
-    pub fn get<R>(th: &mluau::Thread, f: impl FnOnce(&ThreadData) -> R) -> R {
+    pub fn get<R>(sched: &CoreSchedulerInnerV3, th: &mluau::Thread, f: impl FnOnce(&ThreadData) -> R) -> R {
         match th.thread_data::<ThreadData>() {
             Some(data) => (f)(&data),
             None => {
-                let token = CancellationToken::new();
+                let token = sched.cancel_token.child_token();
                 let data = ThreadData {
                     cancel_token: token,
                     return_tracker: ReturnTracker::new(),
@@ -74,11 +74,6 @@ impl CoreSchedulerV3 {
         }
     }
 
-    /// Tries to get strong ref to lua
-    pub fn get_lua(&self) -> Option<mluau::Lua> {
-        self.lua.try_upgrade()
-    }
-
     /// Resumes a Lua thread with the given arguments, handling cancellation and Lua state validity
     /// If args is Ok(T), resumes with values T; if Err(E), resumes with error E
     fn resume_thread(&self, thread: mluau::Thread, args: Result<impl mluau::IntoLuaMulti, impl mluau::IntoLua>) {
@@ -96,7 +91,7 @@ impl CoreSchedulerV3 {
                 Ok(v) => thread.resume(v),
                 Err(e) => thread.resume_error(e),
             };
-            let _ = data.return_tracker.push_result(result);
+            let _ = data.return_tracker.push_result(&thread, result);
         } else {
             // fast-path: we aren't tracking this thread, so no need to store the result
             let _ = match args {
@@ -127,7 +122,7 @@ impl CoreSchedulerV3 {
     pub fn schedule_wait(&self, thread: mluau::Thread, duration: Duration) {
         let this = self.clone(); // Cheap Rc clone
         let start_at = Instant::now();
-        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
+        let cancel_token = ThreadData::get(&self.inner, &thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::time::sleep_until(start_at + duration) => {
@@ -142,7 +137,7 @@ impl CoreSchedulerV3 {
 
     pub fn schedule_deferred(&self, thread: mluau::Thread, args: mluau::MultiValue) {
         let this = self.clone();
-        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
+        let cancel_token = ThreadData::get(&self.inner, &thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::task::yield_now() => {
@@ -158,7 +153,7 @@ impl CoreSchedulerV3 {
     pub fn schedule_delay(&self, thread: mluau::Thread, duration: Duration, args: mluau::MultiValue) {
         let this = self.clone(); // Cheap Rc clone
         let start_at = Instant::now();
-        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
+        let cancel_token = ThreadData::get(&self.inner, &thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 _ = tokio::time::sleep_until(start_at + duration) => {
@@ -177,7 +172,7 @@ impl CoreSchedulerV3 {
     {
         let fut = std::panic::AssertUnwindSafe(fut).catch_unwind();
         let this = self.clone(); // Cheap Rc clone
-        let cancel_token = ThreadData::get(&thread, |data| data.cancel_token.clone());         
+        let cancel_token = ThreadData::get(&self.inner, &thread, |data| data.cancel_token.clone());         
         self.spawn(async move {
             tokio::select! {
                 res = fut => {
