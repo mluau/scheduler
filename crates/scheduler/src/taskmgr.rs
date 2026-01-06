@@ -10,16 +10,6 @@ pub struct ReturnTracker {
             HashMap<XId, tokio::sync::mpsc::UnboundedSender<mluau::Result<mluau::MultiValue>>>,
         >,
     >,
-    wildcard: XRc<
-        XRefCell<
-            Option<
-                tokio::sync::mpsc::UnboundedSender<(
-                    mluau::Thread,
-                    mluau::Result<mluau::MultiValue>,
-                )>,
-            >,
-        >,
-    >,
 }
 
 impl Default for ReturnTracker {
@@ -33,7 +23,6 @@ impl ReturnTracker {
     pub fn new() -> Self {
         Self {
             inner: XRc::new(XRefCell::new(HashMap::new())),
-            wildcard: XRc::new(XRefCell::new(None)),
         }
     }
 
@@ -50,39 +39,16 @@ impl ReturnTracker {
         rx
     }
 
-    pub fn track_wildcard_thread(
-        &self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<(mluau::Thread, mluau::Result<mluau::MultiValue>)>
-    {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut inner = self.wildcard.borrow_mut();
-        *inner = Some(tx);
-        rx
-    }
-
-    /// Set a wildcard sender for all threads
-    pub fn set_wildcard_sender(
-        &self,
-        sender: tokio::sync::mpsc::UnboundedSender<(
-            mluau::Thread,
-            mluau::Result<mluau::MultiValue>,
-        )>,
-    ) {
-        let mut inner = self.wildcard.borrow_mut();
-        *inner = Some(sender);
+    /// Returns if a thread is being tracked
+    pub fn is_tracking(&self, th: &mluau::Thread) -> bool {
+        self.inner
+            .borrow()
+            .contains_key(&XId::from_ptr(th.to_pointer()))
     }
 
     /// Push a result to the tracked thread
     pub fn push_result(&self, th: &mluau::Thread, result: mluau::Result<mluau::MultiValue>) {
         log::trace!("ThreadTracker: Pushing result to thread {th:?}");
-
-        {
-            let inner = self.wildcard.borrow();
-            if let Some(ref tx) = *inner {
-                // Remove the thread from the tracker
-                let _ = tx.send((th.clone(), result.clone()));
-            }
-        }
 
         {
             let inner = self.inner.borrow();
@@ -244,15 +210,12 @@ impl TaskManager {
     }
 
     /// Spawns a thread, discarding its output entirely
-    pub async fn spawn_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) {
-        let resp = thread.resume(args);
-
-        self.returns().push_result(&thread, resp);
+    pub fn spawn_thread(&self, thread: mluau::Thread, args: mluau::MultiValue) -> Result<(), mluau::Error> {
+        thread.resume::<()>(args)?;
+        Ok(())
     }
 
     /// Spawns a thread and then proceeds to get its output properly
-    ///
-    /// This requires ThreadTracker to be attached to the scheduler
     pub async fn spawn_thread_and_wait(
         &self,
         thread: mluau::Thread,

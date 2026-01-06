@@ -15,7 +15,9 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 Err(r) => (false, r).into_lua_multi(lua),
             };
 
-            taskmgr_ref.returns().push_result(&coroutine, resp.clone());
+            if taskmgr_ref.returns().is_tracking(&coroutine) {
+                taskmgr_ref.returns().push_result(&coroutine, resp.clone());
+            }
 
             resp
         })?,
@@ -31,7 +33,9 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
 
             let f = lua.create_function(move |_lua, args: LuaMultiValue| {
                 let result = thread.resume(args);
-                taskmgr_ref.returns().push_result(&thread, result.clone());
+                if taskmgr_ref.returns().is_tracking(&thread) {
+                    taskmgr_ref.returns().push_result(&thread, result.clone());
+                }
                 result
             })?;
 
@@ -126,8 +130,14 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(th) => th,
                 };
 
-                let result = thread.resume(args);
-                taskmgr_ref.returns().push_result(&thread, result.clone());
+                if taskmgr_ref.returns().is_tracking(&thread) {
+                    let result = thread.resume(args);
+                    taskmgr_ref.returns().push_result(&thread, result.clone());
+                } else {
+                    // fast-path: we aren't tracking this thread, so no need to store the result
+                    let _ = thread.resume::<()>(args);
+                }
+
                 Ok(thread)
             },
         )?,

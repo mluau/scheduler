@@ -57,26 +57,6 @@ fn main() {
 
         let returns_tracker = mlua_scheduler::taskmgr::ReturnTracker::new();
 
-        let mut wildcard_sender = returns_tracker.track_wildcard_thread();
-
-        #[cfg(feature = "send")]
-        tokio::task::spawn(async move {
-            while let Some((thread, result)) = wildcard_sender.recv().await {
-                if let Err(e) = result {
-                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
-                }
-            }
-        });
-
-        #[cfg(not(feature = "send"))]
-        tokio::task::spawn_local(async move {
-            while let Some((thread, result)) = wildcard_sender.recv().await {
-                if let Err(e) = result {
-                    eprintln!("Error in thread {e:?}: {:?}", thread.to_pointer());
-                }
-            }
-        });
-
         let task_mgr = mlua_scheduler::taskmgr::TaskManager::new_v3(&lua, returns_tracker, XRc::new(NoopHooks {})).expect("Failed to create task manager");
 
         lua.globals()

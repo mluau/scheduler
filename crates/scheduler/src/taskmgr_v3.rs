@@ -115,10 +115,15 @@ impl CoreSchedulerV3 {
         }
 
         self.hooks.on_resume(&thread);
+        if self.returns.is_tracking(&thread) {
+            let result = thread.resume(args);
+            self.returns.push_result(&thread, result);
+        } else {
+            // fast-path: we aren't tracking this thread, so no need to store the result
+            let _ = thread.resume::<()>(args);
+        }
 
-        let result = thread.resume(args);
-
-        self.returns.push_result(&thread, result);
+        //self.returns.push_result(&thread, result);
     }
 
     /// Resumes a Lua thread with an error, handling cancellation and Lua state validity
@@ -136,9 +141,13 @@ impl CoreSchedulerV3 {
         }
 
         self.hooks.on_resume(&thread);
-        let result = thread.resume_error(err);
-
-        self.returns.push_result(&thread, result);
+        if self.returns.is_tracking(&thread) {
+            let result = thread.resume_error(err);
+            self.returns.push_result(&thread, result);
+        } else {
+            // fast-path: we aren't tracking this thread, so no need to store the result
+            let _ = thread.resume_error::<()>(err);
+        }
     }
 
     #[cfg(not(feature = "send"))]
