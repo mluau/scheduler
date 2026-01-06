@@ -200,17 +200,10 @@ impl TaskManager {
         let mut value = thread.resume(args);
 
         loop {
-            let Some(next) = rx.recv().await else {
-                break;
-            };
-
             if self.get_lua().is_none() {
                 log::trace!("Scheduler is no longer valid, exiting...");
                 break;
             }
-
-            log::trace!("Received value: {next:?}");
-            value = next;
 
             let status = thread.status();
             if (status == mluau::ThreadStatus::Finished || status == mluau::ThreadStatus::Error)
@@ -219,6 +212,14 @@ impl TaskManager {
                 log::trace!("Status: {status:?}");
                 break;
             }
+
+            // Wait for the next result
+            let Some(next) = rx.recv().await else {
+                break;
+            };
+            log::trace!("Received value: {next:?}");
+
+            value = next;
         }
 
         self.stop_tracking_thread(&thread);
