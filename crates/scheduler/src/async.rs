@@ -39,12 +39,7 @@ where
             .expect("Failed to get task manager")
             .clone();
 
-        taskmgr
-            .inner
-            .push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
-                thread: lua.current_thread(),
-                fut: Box::pin(fut),
-            });
+        taskmgr.add_async(lua.current_thread(), fut);
 
         lua.yield_with(())?;
         Ok(())
@@ -150,13 +145,7 @@ where
                     .expect("Failed to get task manager")
                     .clone();
 
-                taskmgr
-                    .inner
-                    .push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
-                        thread: lua.current_thread(),
-                        fut: Box::pin(fut),
-                    });
-
+                taskmgr.add_async(lua.current_thread(), fut);
                 lua.yield_with(())?;
                 Ok(())
             },
@@ -208,13 +197,7 @@ where
                     .expect("Failed to get task manager")
                     .clone();
 
-                taskmgr
-                    .inner
-                    .push_event(crate::taskmgr_v2::SchedulerEvent::AddAsync {
-                        thread: lua.current_thread(),
-                        fut: Box::pin(fut),
-                    });
-
+                taskmgr.add_async(lua.current_thread(), fut);
                 lua.yield_with(())?;
                 Ok(())
             },

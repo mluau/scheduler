@@ -3,6 +3,7 @@ pub mod taskmgr;
 pub mod userdata;
 
 pub mod taskmgr_v2;
+pub mod taskmgr_v3;
 
 pub use r#async::LuaSchedulerAsync;
 pub use r#async::LuaSchedulerAsyncUserData;
@@ -16,6 +17,11 @@ pub const IS_SEND: bool = false;
 pub type XRc<T> = std::sync::Arc<T>;
 #[cfg(not(feature = "send"))]
 pub type XRc<T> = std::rc::Rc<T>;
+
+#[cfg(feature = "send")]
+pub type XWeak<T> = std::sync::Weak<T>;
+#[cfg(not(feature = "send"))]
+pub type XWeak<T> = std::rc::Weak<T>;
 
 // Use XRefCell in case we want to add a Send feature in the future
 #[cfg(not(feature = "send"))]
@@ -125,6 +131,41 @@ impl XUsize {
     }
 
     pub fn set(&self, v: usize) {
+        self.0.set(v)
+    }
+}
+
+/// Use Cell<u64> for non-send an AtomicUsize for send
+#[cfg(feature = "send")]
+pub struct XU64(std::sync::atomic::AtomicU64);
+#[cfg(feature = "send")]
+impl XU64 {
+    pub fn new(i: u64) -> Self {
+        Self(std::sync::atomic::AtomicU64::new(i))
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn set(&self, v: u64) {
+        self.0.store(v, std::sync::atomic::Ordering::Release)
+    }
+}
+
+#[cfg(not(feature = "send"))]
+pub struct XU64(std::cell::Cell<u64>);
+#[cfg(not(feature = "send"))]
+impl XU64 {
+    pub fn new(i: u64) -> Self {
+        Self(std::cell::Cell::new(i))
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0.get()
+    }
+
+    pub fn set(&self, v: u64) {
         self.0.set(v)
     }
 }
