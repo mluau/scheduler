@@ -12,6 +12,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 pub struct ThreadData {
     pub cancel_token: CancellationToken,
     pub return_tracker: ReturnTracker,
+    pub ext: XRefCell<Option<XRc<dyn ExtState>>>,
 }
 
 impl ThreadData {
@@ -32,6 +33,7 @@ impl ThreadData {
                 let data = ThreadData {
                     cancel_token: token,
                     return_tracker: ReturnTracker::new(),
+                    ext: XRefCell::new(None),
                 };
                 let r = (f)(&data);
                 let _ = th.set_thread_data(data).expect("internal error: failed to set thread data");
@@ -62,6 +64,11 @@ impl CoreActor {
             lua,
             hooks,
         }
+    }
+
+    /// Returns if the underlying Lua state is still valid
+    pub fn is_lua_valid(&self) -> bool {
+        self.lua.strong_count() > 0
     }
 
     /// Helper method to resume a thread with an error from a panicked async task
@@ -169,6 +176,9 @@ impl Hooks for NoopHooks {}
 pub trait MaybeSendSyncFut: futures_util::Future + MaybeSend + MaybeSync {}
 impl<T: futures_util::Future + MaybeSend + MaybeSync> MaybeSendSyncFut for T {}
 
+pub trait ExtState: std::any::Any + MaybeSend + MaybeSync + 'static {}
+impl<T: MaybeSend + MaybeSync + 'static> ExtState for T {}
+
 /// A trait that defines the scheduler implementation
 pub trait LimitedSchedulerImpl: MaybeSend + MaybeSync {
     /// Returns the underlying CoreActor
@@ -187,7 +197,17 @@ pub(crate) struct LimitedScheduler(pub(crate) Box<dyn LimitedSchedulerImpl>);
 #[allow(async_fn_in_trait)]
 pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
     /// Creates a new scheduler implementation
+    /// 
+    /// Note that some schedulers may require async initialization, in which case
+    /// `new_async` should be used instead.
     fn new(core_actor: CoreActor) -> Self;
+
+    /// Asynchronously creates a new scheduler implementation
+    async fn new_async(core_actor: CoreActor) -> Result<Self, Error> 
+    where Self: Sized 
+    {
+        Ok(Self::new(core_actor))
+    }
 
     /// Returns the underlying parent cancellation token if any
     fn parent_cancel_token(&self) -> Option<&CancellationToken>;
@@ -241,10 +261,27 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
     /// Sets up a new task manager and stores it in the provided Lua instance's app data
     /// 
     /// Note: This method is pre-provided and does not need to be implemented by the scheduler
+    /// 
+    /// Note that some schedulers may require async initialization, in which case
+    /// `setup_async` should be used instead.
     fn setup(lua: &mluau::Lua, hooks: XRc<dyn Hooks>) -> Result<Self, Error> 
     where Self: Clone + 'static 
     {
         let inner = Self::new(CoreActor::new(lua.weak(), hooks));
+
+        lua.set_app_data(inner.clone());
+        lua.set_app_data(LimitedScheduler(Box::new(inner.clone())));
+
+        Ok(inner)
+    }
+
+    /// Asynchronously sets up a new task manager and stores it in the provided Lua instance's app data
+    /// 
+    /// Note: This method is pre-provided and does not need to be implemented by the scheduler
+    async fn setup_async(lua: &mluau::Lua, hooks: XRc<dyn Hooks>) -> Result<Self, Error> 
+    where Self: Clone + 'static
+    {
+        let inner = Self::new_async(CoreActor::new(lua.weak(), hooks)).await?;
 
         lua.set_app_data(inner.clone());
         lua.set_app_data(LimitedScheduler(Box::new(inner.clone())));

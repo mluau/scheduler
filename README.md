@@ -33,7 +33,12 @@ task.delay(2, function()
 end)
 ```
 
-## V2 scheduler
+## Choose your scheduler
+
+- **Rodan:** Scheduled tasks are stored in a ``tokio-util`` TaskTracker with ``spawn_local``'d tasks. This is the recommended scheduler for most use-cases due to its simplicity and decent performance.
+- **Plinth:** Scheduled tasks are stored in a async task queue with all tasks polled at once. Unlike ``Rodan``, tasks are not immediately removed so cancellation etc. may be delayed and the overall scheduler is more complex. As such, this scheduler is recommended for advanced use-cases only.
+
+## Archive Info
 
 mlua_scheduler has two scheduler versions. v1 (the original scheduler which used busy poll loop/spinloop that ran every tick to run through tasks) and v2 which is a new scheduler design based on tokio select and delayqueue/tokio channels without any busy polling. Here are the differences:
 

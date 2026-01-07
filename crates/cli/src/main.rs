@@ -6,6 +6,9 @@ use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
 use tokio::runtime::LocalOptions;
 
+//type S = mlua_scheduler::rodan::CoreSchedulerV3;
+type S = mlua_scheduler::plinth::CoreScheduler;
+
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")
         .map(PathBuf::from)
@@ -28,7 +31,7 @@ async fn spawn_script(lua: &mluau::Lua, path: PathBuf, g: LuaTable) -> mluau::Re
     let th = lua.create_thread(f)?;
     //println!("Spawning thread: {:?}", th.to_pointer());
 
-    let scheduler = mlua_scheduler::rodan::CoreSchedulerV3::get(lua);
+    let scheduler = S::get(lua);
     let output = scheduler
         .run_in_scheduler(th, mluau::MultiValue::new())
         .await;
@@ -57,7 +60,7 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        let task_mgr = mlua_scheduler::rodan::CoreSchedulerV3::setup(&lua, XRc::new(NoopHooks {})).expect("Failed to create task manager");
+        let task_mgr = S::setup_async(&lua, XRc::new(NoopHooks {})).await.expect("Failed to create task manager");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
@@ -110,7 +113,7 @@ fn main() {
         lua.globals()
             .set(
                 "task",
-                mlua_scheduler::userdata::task_lib::<mlua_scheduler::rodan::CoreSchedulerV3>(&lua).expect("Failed to create table"),
+                mlua_scheduler::userdata::task_lib::<S>(&lua).expect("Failed to create table"),
             )
             .expect("Failed to set task global");
 
