@@ -1,4 +1,4 @@
-use crate::{MaybeSync, taskmgr::LimitedScheduler};
+use crate::{MaybeSync, taskmgr::SchedulerVTable};
 use mluau::prelude::*;
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
@@ -35,7 +35,7 @@ where
         };
 
         let taskmgr = lua
-            .app_data_ref::<LimitedScheduler>()
+            .app_data_ref::<SchedulerVTable>()
             .expect("Failed to get task manager")
             .0
             .clone_box();
@@ -139,7 +139,7 @@ where
                 };
 
                 let taskmgr = lua
-                    .app_data_ref::<LimitedScheduler>()
+                    .app_data_ref::<SchedulerVTable>()
                     .expect("Failed to get task manager")
                     .0
                     .clone_box();
@@ -192,7 +192,7 @@ where
                 };
 
                 let taskmgr = lua
-                    .app_data_ref::<LimitedScheduler>()
+                    .app_data_ref::<SchedulerVTable>()
                     .expect("Failed to get task manager")
                     .0
                     .clone_box();

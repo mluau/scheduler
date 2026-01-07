@@ -1,5 +1,4 @@
 use crate::taskmgr::CoreActor;
-use crate::taskmgr::LimitedSchedulerImpl;
 use crate::taskmgr::SchedulerImpl;
 use crate::taskmgr::ThreadData;
 use crate::XRc;
@@ -316,18 +315,12 @@ impl CoreScheduler {
     }
 }
 
-impl LimitedSchedulerImpl for CoreScheduler {
-    fn core_actor(&self) -> &CoreActor { &self.core_actor }
-    fn clone_box(&self) -> Box<dyn LimitedSchedulerImpl> { Box::new(self.clone()) }
-    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn crate::taskmgr::MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>) {
-        self.push_event(SchedulerEvent::AddAsync { thread, fut });
-    }
-}
-
 impl SchedulerImpl for CoreScheduler {
     fn new(_: CoreActor) -> Self {
-        todo!()
+        unimplemented!("Use CoreScheduler::new_async instead");
     }
+
+    fn core_actor(&self) -> &CoreActor { &self.core_actor }
 
     async fn new_async(core_actor: CoreActor) -> Result<Self, Error> 
     where Self: Sized {
@@ -360,6 +353,12 @@ impl SchedulerImpl for CoreScheduler {
     {
         self.push_event(SchedulerEvent::AddAsync { thread, fut: Box::pin(fut) });    
     }
+
+    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn crate::taskmgr::MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>) {
+        self.push_event(SchedulerEvent::AddAsync { thread, fut });
+    }
+
+    fn clone_box(&self) -> Box<dyn SchedulerImpl> { Box::new(self.clone()) }
 
     fn cancel_thread(&self, thread: &mluau::Thread) -> bool {
         self.cancel_thread(thread).ok().is_some()

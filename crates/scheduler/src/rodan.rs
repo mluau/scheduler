@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use crate::{MaybeSend, MaybeSync, XRc};
-use crate::taskmgr::{CoreActor, LimitedSchedulerImpl, MaybeSendSyncFut, SchedulerImpl, ThreadData};
+use crate::taskmgr::{CoreActor, MaybeSendSyncFut, SchedulerImpl, ThreadData};
 
 
 pub struct Inner {
@@ -19,11 +19,11 @@ pub struct Inner {
 
 
 #[derive(Clone)]
-pub struct CoreSchedulerV3 {
+pub struct CoreScheduler {
     inner: XRc<Inner>,
 }
 
-impl std::ops::Deref for CoreSchedulerV3 {
+impl std::ops::Deref for CoreScheduler {
     type Target = Inner;
 
     fn deref(&self) -> &Self::Target {
@@ -31,7 +31,7 @@ impl std::ops::Deref for CoreSchedulerV3 {
     }
 }
 
-impl CoreSchedulerV3 {
+impl CoreScheduler {
     #[cfg(not(feature = "send"))]
     fn spawn<F>(&self, task: F) -> JoinHandle<F::Output>
     where
@@ -51,16 +51,7 @@ impl CoreSchedulerV3 {
     }
 }
 
-impl LimitedSchedulerImpl for CoreSchedulerV3 {
-    fn core_actor(&self) -> &CoreActor { &self.core_actor }
-    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>) {
-        self.schedule_async(thread, fut);
-    }
-
-    fn clone_box(&self) -> Box<dyn LimitedSchedulerImpl> { Box::new(self.clone()) }
-}
-
-impl SchedulerImpl for CoreSchedulerV3 {
+impl SchedulerImpl for CoreScheduler {
     fn new(core_actor: CoreActor) -> Self {
         Self {
             inner: XRc::new(Inner {
@@ -70,6 +61,8 @@ impl SchedulerImpl for CoreSchedulerV3 {
             }),
         }
     }
+
+    fn core_actor(&self) -> &CoreActor { &self.core_actor }
 
     fn parent_cancel_token(&self) -> Option<&CancellationToken> { Some(&self.cancel_token) }
 
@@ -141,6 +134,12 @@ impl SchedulerImpl for CoreSchedulerV3 {
             }
         });
     }
+
+    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>) {
+        self.schedule_async(thread, fut);
+    }
+
+    fn clone_box(&self) -> Box<dyn SchedulerImpl> { Box::new(self.clone()) }
 
     fn cancel_thread(&self, thread: &mluau::Thread) -> bool {
         match ThreadData::get_existing(thread) {

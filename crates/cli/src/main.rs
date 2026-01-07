@@ -6,7 +6,7 @@ use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
 use tokio::runtime::LocalOptions;
 
-type S = mlua_scheduler::rodan::CoreSchedulerV3;
+type S = mlua_scheduler::rodan::CoreScheduler;
 //type S = mlua_scheduler::plinth::CoreScheduler;
 
 fn get_default_log_path() -> PathBuf {

@@ -179,28 +179,16 @@ impl<T: futures_util::Future + MaybeSend + MaybeSync> MaybeSendSyncFut for T {}
 pub trait ExtState: std::any::Any + MaybeSend + MaybeSync + 'static {}
 impl<T: MaybeSend + MaybeSync + 'static> ExtState for T {}
 
-/// A trait that defines the scheduler implementation
-pub trait LimitedSchedulerImpl: MaybeSend + MaybeSync {
-    /// Returns the underlying CoreActor
-    fn core_actor(&self) -> &CoreActor;
-
-    /// Schedules an async future to resume the thread when complete
-    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>);
-
-    /// Clones the limited scheduler into a boxed trait object
-    fn clone_box(&self) -> Box<dyn LimitedSchedulerImpl>;
-}
-
-pub(crate) struct LimitedScheduler(pub(crate) Box<dyn LimitedSchedulerImpl>);
+pub(crate) struct SchedulerVTable(pub(crate) Box<dyn SchedulerImpl>);
 
 /// A trait that defines the scheduler implementation
 #[allow(async_fn_in_trait)]
-pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
+pub trait SchedulerImpl: MaybeSend + MaybeSync {
     /// Creates a new scheduler implementation
     /// 
     /// Note that some schedulers may require async initialization, in which case
     /// `new_async` should be used instead.
-    fn new(core_actor: CoreActor) -> Self;
+    fn new(core_actor: CoreActor) -> Self where Self: Sized;
 
     /// Asynchronously creates a new scheduler implementation
     async fn new_async(core_actor: CoreActor) -> Result<Self, Error> 
@@ -208,6 +196,9 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
     {
         Ok(Self::new(core_actor))
     }
+
+    /// Returns the core actor of the scheduler
+    fn core_actor(&self) -> &CoreActor;
 
     /// Returns the underlying parent cancellation token if any
     fn parent_cancel_token(&self) -> Option<&CancellationToken>;
@@ -224,13 +215,15 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
     /// Schedules an async future to resume the thread when complete
     fn schedule_async<F>(&self, thread: mluau::Thread, fut: F) 
     where 
+        Self: Sized,
         F: Future<Output = mluau::Result<mluau::MultiValue>> + MaybeSend + MaybeSync + 'static;
 
     /// Cancels a thread
     fn cancel_thread(&self, thread: &mluau::Thread) -> bool;
     
     /// Waits till all scheduled tasks are done
-    async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn wait_till_done(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where Self: Sized;
 
     /// Stops the scheduler
     fn stop(&self);
@@ -242,7 +235,9 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
         &self,
         thread: mluau::Thread,
         args: mluau::MultiValue,
-    ) -> mluau::Result<mluau::MultiValue> {
+    ) -> mluau::Result<mluau::MultiValue> 
+    where Self: Sized
+    {
         let rx = ThreadData::get_or_set(self.parent_cancel_token(), &thread, |data| data.return_tracker.track());
 
         let value = thread.resume(args);
@@ -270,7 +265,7 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
         let inner = Self::new(CoreActor::new(lua.weak(), hooks));
 
         lua.set_app_data(inner.clone());
-        lua.set_app_data(LimitedScheduler(Box::new(inner.clone())));
+        lua.set_app_data(SchedulerVTable(inner.clone_box()));
 
         Ok(inner)
     }
@@ -284,7 +279,7 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
         let inner = Self::new_async(CoreActor::new(lua.weak(), hooks)).await?;
 
         lua.set_app_data(inner.clone());
-        lua.set_app_data(LimitedScheduler(Box::new(inner.clone())));
+        lua.set_app_data(SchedulerVTable(Box::new(inner.clone())));
 
         Ok(inner)
     }
@@ -299,4 +294,10 @@ pub trait SchedulerImpl: LimitedSchedulerImpl + MaybeSend + MaybeSync {
             .expect("Failed to get task manager")
             .clone()
     }
+
+    /// Schedules an async future to resume the thread when complete
+    fn schedule_async_dyn(&self, thread: mluau::Thread, fut: Pin<Box<dyn MaybeSendSyncFut<Output = mluau::Result<mluau::MultiValue>> + 'static>>);
+
+    /// Clones the scheduler into a boxed trait object
+    fn clone_box(&self) -> Box<dyn SchedulerImpl>;
 }
