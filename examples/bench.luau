@@ -17,7 +17,7 @@ end
 
 local started = os.clock()
 
-local amount = 100000
+local amount = 1000000
 local batches = 5
 local per_batch = amount / batches
 

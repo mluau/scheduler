@@ -1,8 +1,10 @@
 use clap::Parser;
+use mlua_scheduler::taskmgr::SchedulerImpl;
 use mlua_scheduler::{taskmgr::NoopHooks, LuaSchedulerAsync, XRc};
 use mluau::prelude::*;
 use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
+use tokio::runtime::LocalOptions;
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")
@@ -26,9 +28,9 @@ async fn spawn_script(lua: &mluau::Lua, path: PathBuf, g: LuaTable) -> mluau::Re
     let th = lua.create_thread(f)?;
     //println!("Spawning thread: {:?}", th.to_pointer());
 
-    let scheduler = mlua_scheduler::taskmgr::get(lua);
+    let scheduler = mlua_scheduler::rodan::CoreSchedulerV3::get(lua);
     let output = scheduler
-        .spawn_thread_and_wait(th, mluau::MultiValue::new())
+        .run_in_scheduler(th, mluau::MultiValue::new())
         .await;
 
     println!("Output: {output:?}");
@@ -55,7 +57,7 @@ fn main() {
 
         lua.set_compiler(compiler);
 
-        let task_mgr = mlua_scheduler::taskmgr::TaskManager::new(&lua, XRc::new(NoopHooks {})).expect("Failed to create task manager");
+        let task_mgr = mlua_scheduler::rodan::CoreSchedulerV3::setup(&lua, XRc::new(NoopHooks {})).expect("Failed to create task manager");
 
         lua.globals()
             .set("_OS", OS.to_lowercase())
@@ -108,7 +110,7 @@ fn main() {
         lua.globals()
             .set(
                 "task",
-                mlua_scheduler::userdata::task_lib(&lua).expect("Failed to create table"),
+                mlua_scheduler::userdata::task_lib::<mlua_scheduler::rodan::CoreSchedulerV3>(&lua).expect("Failed to create table"),
             )
             .expect("Failed to set task global");
 
@@ -180,11 +182,10 @@ fn main() {
     {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
+            .build_local(LocalOptions::default())
             .unwrap();
 
-        let local = tokio::task::LocalSet::new();
-        local.block_on(&rt, async_closure);
+        rt.block_on(async_closure);
     }
     #[cfg(feature = "send")]
     {

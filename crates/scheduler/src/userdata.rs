@@ -1,42 +1,31 @@
 use mluau::prelude::*;
 
-/// Creates the `task` library, patching coroutine.resume to handle on_response signals as appropriate.
-pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
-    let taskmgr_parent = super::taskmgr::get(lua);
+use crate::taskmgr::SchedulerImpl;
 
-    let taskmgr_ref = taskmgr_parent.clone();
+/// Creates the `task` library, patching coroutine.resume to handle on_response signals as appropriate.
+pub fn task_lib<T: SchedulerImpl + Clone + 'static>(lua: &Lua) -> LuaResult<LuaTable> {
     lua.globals().get::<LuaTable>("coroutine")?.set(
         "resume",
         lua.create_function(move |lua, (coroutine, args): (LuaThread, LuaMultiValue)| {
-            let result = coroutine.resume::<LuaMultiValue>(args);
+            let taskmgr = T::get(lua);
+            let result = taskmgr.core_actor().resume_thread_result(coroutine, args);
 
-            let resp = match result {
+            match result {
                 Ok(r) => (true, r).into_lua_multi(lua),
                 Err(r) => (false, r).into_lua_multi(lua),
-            };
-
-            if taskmgr_ref.is_tracking(&coroutine) {
-                taskmgr_ref.push_result(&coroutine, resp.clone());
             }
-
-            resp
         })?,
     )?;
 
-    let taskmgr_ref = taskmgr_parent.clone();
     lua.globals().get::<LuaTable>("coroutine")?.set(
         "wrap",
         lua.create_function(move |lua, f: LuaFunction| {
             // coroutine.wrap is a convenience function that creates a coroutine and returns a function that resumes it.
             let thread = lua.create_thread(f)?;
-            let taskmgr_ref = taskmgr_ref.clone();
+            let taskmgr = T::get(lua);
 
             let f = lua.create_function(move |_lua, args: LuaMultiValue| {
-                let result = thread.resume(args);
-                if taskmgr_ref.is_tracking(&thread) {
-                    taskmgr_ref.push_result(&thread, result.clone());
-                }
-                result
+                taskmgr.core_actor().resume_thread_result(thread.clone(), args)
             })?;
 
             Ok(f)
@@ -44,6 +33,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     let table = lua.create_table()?;
+    let taskmgr_parent = T::get(lua);
     let taskmgr_ref = taskmgr_parent.clone();
     table.set(
         "defer",
@@ -54,7 +44,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(th) => th,
                 };
 
-                taskmgr_ref.add_deferred_thread(thread.clone(), args);
+                taskmgr_ref.schedule_deferred(thread.clone(), args);
                 Ok(thread)
             },
         )?,
@@ -70,10 +60,10 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(th) => th,
                 };
 
-                taskmgr_ref.add_waiting_thread(
+                taskmgr_ref.schedule_delay(
                     thread.clone(),
-                    Some(args),
                     std::time::Duration::from_secs_f64(time.max(0.05)),
+                    args,
                 );
                 Ok(thread)
             },
@@ -105,7 +95,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                 std::time::Duration::from_secs_f64(t.max(0.05))
             });
 
-            taskmgr_ref.add_waiting_thread(thread, None, duration);
+            taskmgr_ref.schedule_wait(thread, duration);
             lua.yield_with(())
         })?,
     )?;
@@ -115,7 +105,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
     table.set(
         "cancel",
         lua.create_function(move |_lua, thread: LuaThread| {
-            taskmgr_ref.cancel_thread(&thread)?;
+            taskmgr_ref.cancel_thread(&thread);
             Ok(())
         })?,
     )?;
@@ -130,13 +120,7 @@ pub fn task_lib(lua: &Lua) -> LuaResult<LuaTable> {
                     LuaEither::Right(th) => th,
                 };
 
-                if taskmgr_ref.is_tracking(&thread) {
-                    let result = thread.resume(args);
-                    taskmgr_ref.push_result(&thread, result.clone());
-                } else {
-                    // fast-path: we aren't tracking this thread, so no need to store the result
-                    let _ = thread.resume::<()>(args);
-                }
+                taskmgr_ref.core_actor().resume_thread(thread.clone(), Ok::<_, mluau::Error>(args));
 
                 Ok(thread)
             },

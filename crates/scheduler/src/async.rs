@@ -1,4 +1,4 @@
-use crate::{MaybeSync, TaskManager};
+use crate::{MaybeSync, taskmgr::LimitedScheduler};
 use mluau::prelude::*;
 
 pub fn create_async_lua_function<A, F, R, FR>(lua: &Lua, func: F) -> LuaResult<LuaFunction>
@@ -35,11 +35,12 @@ where
         };
 
         let taskmgr = lua
-            .app_data_ref::<TaskManager>()
+            .app_data_ref::<LimitedScheduler>()
             .expect("Failed to get task manager")
-            .clone();
+            .0
+            .clone_box();
 
-        taskmgr.add_async(lua.current_thread(), fut);
+        taskmgr.schedule_async_dyn(lua.current_thread(), Box::pin(fut));
 
         lua.yield_with(())?;
         Ok(())
@@ -49,9 +50,6 @@ where
 pub trait LuaSchedulerAsync {
     /**
      * Creates a scheduler-handled async function
-     *
-     * Note that while `create_async_function` can still be used. Functions that need to have Lua scheduler aware
-     * characteristics should use this function instead.
      *
      * # Panics
      *
@@ -141,11 +139,12 @@ where
                 };
 
                 let taskmgr = lua
-                    .app_data_ref::<TaskManager>()
+                    .app_data_ref::<LimitedScheduler>()
                     .expect("Failed to get task manager")
-                    .clone();
+                    .0
+                    .clone_box();
 
-                taskmgr.add_async(lua.current_thread(), fut);
+                taskmgr.schedule_async_dyn(lua.current_thread(), Box::pin(fut));
                 lua.yield_with(())?;
                 Ok(())
             },
@@ -193,11 +192,12 @@ where
                 };
 
                 let taskmgr = lua
-                    .app_data_ref::<TaskManager>()
+                    .app_data_ref::<LimitedScheduler>()
                     .expect("Failed to get task manager")
-                    .clone();
+                    .0
+                    .clone_box();
 
-                taskmgr.add_async(lua.current_thread(), fut);
+                taskmgr.schedule_async_dyn(lua.current_thread(), Box::pin(fut));
                 lua.yield_with(())?;
                 Ok(())
             },
