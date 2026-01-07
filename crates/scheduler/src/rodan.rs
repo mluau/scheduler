@@ -7,15 +7,28 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use crate::{MaybeSend, MaybeSync};
+use crate::{MaybeSend, MaybeSync, XRc};
 use crate::taskmgr::{CoreActor, LimitedSchedulerImpl, MaybeSendSyncFut, SchedulerImpl, ThreadData};
+
+
+pub struct Inner {
+    core_actor: CoreActor,
+    cancel_token: CancellationToken,
+    tracker: TaskTracker,
+}
 
 
 #[derive(Clone)]
 pub struct CoreSchedulerV3 {
-    core_actor: CoreActor,
-    cancel_token: CancellationToken,
-    tracker: TaskTracker,
+    inner: XRc<Inner>,
+}
+
+impl std::ops::Deref for CoreSchedulerV3 {
+    type Target = Inner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl CoreSchedulerV3 {
@@ -50,9 +63,11 @@ impl LimitedSchedulerImpl for CoreSchedulerV3 {
 impl SchedulerImpl for CoreSchedulerV3 {
     fn new(core_actor: CoreActor) -> Self {
         Self {
-            core_actor,
-            cancel_token: CancellationToken::new(),
-            tracker: TaskTracker::new(),
+            inner: XRc::new(Inner {
+                core_actor,
+                cancel_token: CancellationToken::new(),
+                tracker: TaskTracker::new(),
+            }),
         }
     }
 
