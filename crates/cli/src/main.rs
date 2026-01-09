@@ -6,8 +6,9 @@ use std::{env::consts::OS, path::PathBuf};
 use tokio::fs;
 use tokio::runtime::LocalOptions;
 
-type S = mlua_scheduler::rodan::CoreScheduler;
-//type S = mlua_scheduler::plinth::CoreScheduler;
+//type S = mlua_scheduler::schedulers::rodan::CoreScheduler;
+//type S = mlua_scheduler::schedulers::plinth::CoreScheduler;
+type S = mlua_scheduler::schedulers::batcher::CoreScheduler;
 
 fn get_default_log_path() -> PathBuf {
     std::env::var("TFILE")

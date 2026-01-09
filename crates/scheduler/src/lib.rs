@@ -1,8 +1,7 @@
 mod r#async;
 pub mod taskmgr;
 pub mod userdata;
-pub mod rodan;
-pub mod plinth;
+pub mod schedulers;
 
 pub use r#async::LuaSchedulerAsync;
 pub use r#async::LuaSchedulerAsyncUserData;

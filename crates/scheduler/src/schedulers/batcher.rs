@@ -8,8 +8,9 @@ use futures_util::FutureExt;
 use futures_util::StreamExt;
 use futures_util::TryFutureExt;
 use tokio_util::sync::CancellationToken;
+use std::collections::VecDeque;
 use std::pin::Pin;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch::{Receiver, Sender};
 use tokio_util::time::delay_queue::Key as DelayQueueKey;
 use tokio_util::time::DelayQueue;
@@ -19,11 +20,6 @@ pub struct WaitingThread {
     delay_args: Option<mluau::MultiValue>,
     start_at: std::time::Instant,
     thread: mluau::Thread,
-}
-
-pub struct DeferredThread {
-    thread: mluau::Thread,
-    args: mluau::MultiValue,
 }
 
 pub enum SchedulerEvent {
@@ -48,7 +44,6 @@ pub enum SchedulerEvent {
         #[cfg(not(feature = "send"))]
         fut: Pin<Box<dyn Future<Output = mluau::Result<mluau::MultiValue>>>>,
     },
-    Next {},
     Clear {},
     Close {},
 }
@@ -86,6 +81,11 @@ impl std::ops::Deref for CoreScheduler {
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
+
+#[cfg(feature = "send")]
+type Fut = Pin<Box<dyn Future<Output = Result<(mluau::Thread, mluau::Result<mluau::MultiValue>), (mluau::Thread, Box<dyn std::any::Any + Send>)>> + Send>>;
+#[cfg(not(feature = "send"))]
+type Fut = Pin<Box<dyn Future<Output = Result<(mluau::Thread, mluau::Result<mluau::MultiValue>), (mluau::Thread, Box<dyn std::any::Any + Send>)>>>>;
 
 impl CoreScheduler {
     /// Creates a new task manager and spawns it
@@ -132,16 +132,68 @@ impl CoreScheduler {
         Ok(scheduler)
     }
 
+    fn handle_event(
+        &self, 
+        event: SchedulerEvent,
+        wait_queue: &mut DelayQueue<WaitingThread>,
+        async_queue: &mut FuturesUnordered<Fut>,
+        run_queue: &mut VecDeque<(mluau::Thread, Result<mluau::MultiValue, mluau::Error>)>,
+    ) {
+        match event {
+            SchedulerEvent::Wait { delay_args, thread, start_at, duration } => {
+                let key = wait_queue.insert(
+                    WaitingThread {
+                        delay_args,
+                        start_at,
+                        thread: thread.clone(),
+                    },
+                    duration
+                );
+
+                ThreadData::get_or_set(Some(&self.cancel_token), &thread, |data| {
+                    let ext_thread_data = ExtThreadData {
+                        wait_key: key,
+                    };
+                    *data.ext.borrow_mut() = Some(Box::new(ext_thread_data));
+                });
+            },
+            SchedulerEvent::RemoveWait { key } => {
+                wait_queue.remove(&key);
+            },
+            SchedulerEvent::DeferredThread { thread, args } => {
+                run_queue.push_back((thread, Ok(args)));
+            },
+            SchedulerEvent::AddAsync { thread, fut } => {
+                let thread_err = thread.clone();
+                let fut = std::panic::AssertUnwindSafe(
+                        fut
+                        .map(move |x| (thread, x))
+                    )
+                    .catch_unwind()
+                    .map_err(move |e| (thread_err, e));
+                async_queue.push(
+                    Box::pin(fut)
+                );
+            }
+            SchedulerEvent::Clear {} => {
+                wait_queue.clear();
+                async_queue.clear();
+                run_queue.clear();
+            }
+            SchedulerEvent::Close {} => {
+                self.done_tx.send_replace(true);
+            }
+        }
+    }
+ 
     /// Runs the task manager
     async fn run(&self, start_tx: OneShotSender<()>, mut rx: UnboundedReceiver<SchedulerEvent>) {
         let mut wait_queue: DelayQueue<WaitingThread> = DelayQueue::new();
         let mut async_queue = FuturesUnordered::new();
-        let mut deferred_queue: (
-            UnboundedSender<DeferredThread>,
-            UnboundedReceiver<DeferredThread>,
-        ) = unbounded_channel();
 
         let _ = start_tx.send(());
+
+        let mut run_queue: VecDeque<(mluau::Thread, Result<mluau::MultiValue, mluau::Error>)> = VecDeque::with_capacity(1024);
 
         loop {
             if !self.core_actor.is_lua_valid() {
@@ -151,124 +203,54 @@ impl CoreScheduler {
             }
 
             log::trace!("Task manager loop iteration");
-            tokio::select! {
-                Some(event) = rx.recv() => {
-                    match event {
-                        SchedulerEvent::Wait { delay_args, thread, start_at, duration } => {
-                            log::debug!("Adding waiting thread");
 
-                            let key = wait_queue.insert(
-                                WaitingThread {
-                                    delay_args,
-                                    start_at,
-                                    thread: thread.clone(),
-                                },
-                                duration
-                            );
-
-                            ThreadData::get_or_set(Some(&self.cancel_token), &thread, |data| {
-                                let ext_thread_data = ExtThreadData {
-                                    wait_key: key,
-                                };
-                                *data.ext.borrow_mut() = Some(XRc::new(ext_thread_data));
-                            });
-                        },
-                        SchedulerEvent::RemoveWait { key } => {
-                            wait_queue.remove(&key);
-                        },
-                        SchedulerEvent::DeferredThread { thread, args } => {
-                            let _ = deferred_queue.0.send(DeferredThread {
-                                thread,
-                                args,
-                            });
-                        },
-                        SchedulerEvent::AddAsync { thread, fut } => {
-                            let thread_err = thread.clone();
-                            async_queue.push(
-                                std::panic::AssertUnwindSafe(
-                                    fut
-                                    .map(move |x| (thread, x))
-                                )
-                                .catch_unwind()
-                                .map_err(move |e| (thread_err, e))
-                            );
-                        }
-                        SchedulerEvent::Next {} => {
-                            // No-op, just to wake up the task manager
-                        }
-                        SchedulerEvent::Clear {} => {
-                            wait_queue.clear();
-                            while deferred_queue.1.recv().await.is_some() {}
-                        }
-                        SchedulerEvent::Close {} => {
-                            self.done_tx.send_replace(true);
-                            return;
-                        }
-                    }
-                },
-                Some(value) = wait_queue.next() => {  
-                    if ThreadData::get_or_set(Some(&self.cancel_token), &value.get_ref().thread, |data| {
-                        data.cancel_token.is_cancelled()    
-                    }) {
-                        continue;
-                    }
-                    
-                    let inner = value.into_inner();
-                    match inner.delay_args {
-                        Some(args) => self.core_actor.resume_thread(inner.thread, Ok::<_, mluau::Error>(args)),
-                        None => self.core_actor.resume_thread(inner.thread, Ok::<_, mluau::Error>(inner.start_at.elapsed().as_secs_f64()))
-                    };
+            // Process anything in run queue now
+            while let Some((thread, result)) = run_queue.pop_front() {
+                if ThreadData::get_or_set(Some(&self.cancel_token), &thread, |data| {
+                    data.cancel_token.is_cancelled()    
+                }) {
+                    continue;
                 }
-                Some(deferred_thread) = deferred_queue.1.recv() => {
-                    if ThreadData::get_or_set(Some(&self.cancel_token), &deferred_thread.thread, |data| {
-                        data.cancel_token.is_cancelled()    
-                    }) {
-                        continue;
-                    }
 
-                    self.core_actor.resume_thread(deferred_thread.thread, Ok::<_, mluau::Error>(deferred_thread.args));
-                },
-                Some(resp) = async_queue.next() => {
-                    match resp {
-                        Ok((thread, async_resp)) => {
-                            if ThreadData::get_or_set(Some(&self.cancel_token), &thread, |data| {
-                                data.cancel_token.is_cancelled()    
-                            }) {
-                                continue;
-                            }
-
-                            match async_resp {
-                                Ok(resp) => self.core_actor.resume_thread(thread, Ok::<_, mluau::Error>(resp)),
-                                Err(e) => self.core_actor.resume_thread(thread, Err::<(), _>(e)),
-                            }
-                        },
-                        Err((thread, e)) => {
-                            if ThreadData::get_or_set(Some(&self.cancel_token), &thread, |data| {
-                                data.cancel_token.is_cancelled()    
-                            }) {
-                                continue;
-                            }
-
-                            self.core_actor.resume_thread_panic(thread, e)
-                        }, 
-                    }
-                }
-                _ = self.cancel_token.cancelled() => {
-                    log::trace!("Task manager received cancellation signal, stopping task manager");
-                    self.done_tx.send_replace(true);
-                    return;
-                }
-            };
+                self.core_actor.resume_thread(thread, result);
+            }
 
             if async_queue.is_empty()
                 && wait_queue.is_empty()
-                && deferred_queue.1.is_empty()
+                && run_queue.is_empty()
                 && rx.is_empty()
             {
                 self.done_tx.send_replace(true);
             } else {
                 self.done_tx.send_replace(false);
             }
+
+            tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                Some(event) = rx.recv() => {
+                    self.handle_event(event, &mut wait_queue, &mut async_queue, &mut run_queue);
+                }
+                Some(value) = wait_queue.next() => {  
+                    let thread = value.into_inner();
+                    run_queue.push_back((thread.thread, match thread.delay_args {
+                        Some(args) => Ok(args),
+                        None => Ok(mluau::MultiValue::from_vec(vec![mluau::Value::Number(thread.start_at.elapsed().as_secs_f64())])),
+                    }));
+                }
+                Some(res) = async_queue.next() => {
+                    match res {
+                        Ok((thread, result)) => {
+                            run_queue.push_back((thread, result));
+                        },
+                        Err((thread, err)) => {
+                            let error_payload = self.core_actor.create_panic_error(err);
+                            run_queue.push_back((thread, Err(error_payload)));
+                        }
+                    }
+                }
+                else => {
+                }
+            };
         }
     }
 
@@ -292,10 +274,8 @@ impl CoreScheduler {
     /// Cancels a thread
     pub fn cancel_thread(&self, thread: &mluau::Thread) -> Result<(), mluau::Error> {
         if let Some(existing) = ThreadData::get_existing(thread) {
-            if let Some(ext) = existing.ext.borrow().clone() {
-                if let Ok(key) = XRc::downcast::<ExtThreadData>(ext) {
-                    self.push_event(SchedulerEvent::RemoveWait { key: key.wait_key });
-                }
+            if let Some(ref ext) = *existing.ext.borrow() && let Some(key) = ext.downcast_ref::<ExtThreadData>() {
+                self.push_event(SchedulerEvent::RemoveWait { key: key.wait_key });
             }
             existing.cancel_token.cancel();
         }

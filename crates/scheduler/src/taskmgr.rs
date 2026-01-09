@@ -12,7 +12,10 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 pub struct ThreadData {
     pub cancel_token: CancellationToken,
     pub return_tracker: ReturnTracker,
-    pub ext: XRefCell<Option<XRc<dyn ExtState>>>,
+    #[cfg(feature = "send")]
+    pub ext: XRefCell<Option<Box<dyn std::any::Any + Send + Sync>>>,
+    #[cfg(not(feature = "send"))]
+    pub ext: XRefCell<Option<Box<dyn std::any::Any>>>,
 }
 
 impl ThreadData {
@@ -36,7 +39,7 @@ impl ThreadData {
                     ext: XRefCell::new(None),
                 };
                 let r = (f)(&data);
-                let _ = th.set_thread_data(data).expect("internal error: failed to set thread data");
+                th.set_thread_data(data).expect("internal error: failed to set thread data");
                 r
             },
         }
@@ -71,8 +74,8 @@ impl CoreActor {
         self.lua.strong_count() > 0
     }
 
-    /// Helper method to resume a thread with an error from a panicked async task
-    pub fn resume_thread_panic(&self, thread: mluau::Thread, err: Box<dyn std::any::Any + Send>) {
+    /// Helper method to create a error payload from a panicked async task
+    pub fn create_panic_error(&self, err: Box<dyn std::any::Any + Send>) -> mluau::Error {
         let mut error_payload = format!("Error in async thread: {err:?}");
         if let Some(error) = err.downcast_ref::<String>() {
             error_payload = format!("Error in async thread: {error}");
@@ -81,7 +84,13 @@ impl CoreActor {
             error_payload = format!("Error in async thread: {error}");
         }
 
-        self.resume_thread(thread, Err::<(), String>(error_payload));
+        mluau::Error::external(error_payload)
+    }
+
+    /// Helper method to resume a thread with an error from a panicked async task
+    pub fn resume_thread_panic(&self, thread: mluau::Thread, err: Box<dyn std::any::Any + Send>) {
+        let error_payload = self.create_panic_error(err);
+        self.resume_thread(thread, Err::<(), mluau::Error>(error_payload));
     }
 
     /// Resumes a Lua thread with the given arguments, handling cancellation and Lua state validity
@@ -101,7 +110,7 @@ impl CoreActor {
                 Ok(v) => thread.resume(v),
                 Err(e) => thread.resume_error(e),
             };
-            let _ = data.return_tracker.push_result(&thread, result);
+            data.return_tracker.push_result(&thread, result);
         } else {
             // fast-path: we aren't tracking this thread, so no need to store the result
             let _ = match args {
@@ -250,7 +259,7 @@ pub trait SchedulerImpl: MaybeSend + MaybeSync {
         }
 
         let v = rx.await.map_err(|_| mluau::Error::external("Failed to receive thread result"))?;
-        return v;
+        v
     }
 
     /// Sets up a new task manager and stores it in the provided Lua instance's app data
